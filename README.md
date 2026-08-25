@@ -11,6 +11,7 @@ A full-stack e-commerce application built as part of the Novestra Full-Stack Ups
 - PostgreSQL
 - Auth0 (JWT validation, RBAC roles)
 - Stripe Checkout + Webhooks
+- AWS S3 (product image storage)
 - xUnit + Moq + FluentAssertions (unit tests)
 
 **Frontend**
@@ -53,12 +54,12 @@ A full-stack e-commerce application built as part of the Novestra Full-Stack Ups
 
 ```
 ShoppingCart_Backend/
-    ShoppingCart.API/              — Controllers, Program.cs, app configuration
-    ShoppingCart.Application/      — DTOs, service interfaces, business logic
-    ShoppingCart.Infrastructure/   — Dapper repositories, Stripe integration
-    ShoppingCart.Core/             — Domain entities
-    ShoppingCart.UnitTests/        — xUnit backend tests
-ShoppingCart_Frontend/             — React frontend
+   ShoppingCart.API/              — Controllers, Program.cs, app configuration
+   ShoppingCart.Application/      — DTOs, service interfaces, business logic
+   ShoppingCart.Infrastructure/   — Dapper repositories, Stripe integration
+   ShoppingCart.Core/             — Domain entities
+   ShoppingCart.UnitTests/        — xUnit backend tests
+ShoppingCart_Frontend/            — React frontend
 ```
 
 ## Getting Started
@@ -123,9 +124,11 @@ ShoppingCart_Frontend/             — React frontend
      }
    }
    ```
-3. Create the upload folder (not tracked in git):
+3. Create an empty 'wwwroot' folder (required by ASP.NET Core's static web assets
+   loader, even though this project no longer serves files from it — images are
+   stored in S3):
    ```bash
-   mkdir -p ShoppingCart.API/wwwroot/uploads/products
+      mkdir ShoppingCart.API/wwwroot
    ```
 4. Run the API:
    ```bash

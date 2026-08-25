@@ -1,0 +1,256 @@
+﻿using ShoppingCart.Application.Interfaces;
+using ShoppingCart.Application.Models;
+using ShoppingCart.Core.Entities;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using static ShoppingCart.Application.DTOs.OrderDtos;
+
+namespace ShoppingCart.Application.Services
+{
+    public class OrderService : IOrderService
+    {
+        private readonly IOrderRepository _orderRepository;
+        private readonly ICartRepository _cartRepository;
+        private readonly ICartItemRepository _cartItemRepository;
+        private readonly IProductRepository _productRepository;
+        private readonly IPaymentService _paymentService;
+
+        public OrderService(
+            IOrderRepository orderRepository,
+            ICartRepository cartRepository,
+            ICartItemRepository cartItemRepository,
+            IProductRepository productRepository,
+            IPaymentService paymentService)
+        {
+            _orderRepository = orderRepository;
+            _cartRepository = cartRepository;
+            _cartItemRepository = cartItemRepository;
+            _productRepository = productRepository;
+            _paymentService = paymentService;
+        }
+
+        public async Task<OrderDto> CheckoutCartAsync(int userId, CheckoutDto dto)
+        {
+            var cart = await _cartRepository.GetByUserIdAsync(userId)
+                ?? throw new InvalidOperationException("Your cart is empty.");
+
+            var cartItems = (await _cartItemRepository.GetAllForCartAsync(cart.CartId)).ToList();
+            if (cartItems.Count == 0)
+                throw new InvalidOperationException("Your cart is empty.");
+
+            // Snapshot each product's CURRENT price right now, at checkout — this becomes
+            // permanent on the order regardless of what Products.Price does afterward.
+            var orderItems = cartItems
+                .Select(ci => new OrderItemInput(ci.ProductId, ci.Quantity, ci.UnitPrice))
+                .ToList();
+
+            var orderId = await _orderRepository.CreateOrderWithItemsAsync(userId, dto.ShippingAddress, orderItems);
+
+            // Only clear the cart AFTER the order transaction succeeds — if CreateOrderWithItemsAsync
+            // threw (e.g. insufficient stock), execution never reaches this line, and the cart is left untouched.
+            await _cartItemRepository.DeleteAllForCartAsync(cart.CartId);
+
+            return await GetOrderAsync(userId, orderId)
+                ?? throw new InvalidOperationException("Order created but could not be retrieved.");
+        }
+
+        public async Task<OrderDto> BuyNowAsync(int userId, BuyNowDto dto)
+        {
+            if (dto.Quantity <= 0)
+                throw new InvalidOperationException("Quantity must be greater than zero.");
+
+            var product = await _productRepository.GetByIdAsync(dto.ProductId)
+                ?? throw new InvalidOperationException("Product not found.");
+
+            var orderItems = new List<OrderItemInput>
+        {
+            new(product.ProductId, dto.Quantity, product.Price)
+        };
+
+            var orderId = await _orderRepository.CreateOrderWithItemsAsync(userId, dto.ShippingAddress, orderItems);
+
+            // No cart involved at all — nothing to clear afterward.
+            return await GetOrderAsync(userId, orderId)
+                ?? throw new InvalidOperationException("Order created but could not be retrieved.");
+        }
+
+        public async Task<IEnumerable<OrderDto>> GetOrdersForUserAsync(int userId)
+        {
+            var orders = await _orderRepository.GetAllForUserAsync(userId);
+            var result = new List<OrderDto>();
+
+            foreach (var order in orders)
+            {
+                var items = await _orderRepository.GetItemsForOrderAsync(order.OrderId);
+                result.Add(MapToDto(order, items));
+            }
+
+            return result;
+        }
+
+        public async Task<OrderDto?> GetOrderAsync(int userId, int orderId)
+        {
+            var order = await _orderRepository.GetByIdAsync(orderId, userId);
+            if (order is null) return null;
+
+            var items = await _orderRepository.GetItemsForOrderAsync(orderId);
+            return MapToDto(order, items);
+        }
+
+        private static OrderDto MapToDto(Order order, IEnumerable<OrderItemWithProduct> items)
+        {
+            var itemDtos = items.Select(i => new OrderItemDto(
+                i.OrderItemId, i.ProductId, i.ProductName, i.ImageUrl,
+                i.Quantity, i.UnitPrice, i.UnitPrice * i.Quantity
+            )).ToList();
+
+            return new OrderDto(order.OrderId, order.Status, order.TotalAmount, order.ShippingAddress, order.CreatedAt, itemDtos);
+        }
+
+        private static readonly HashSet<string> ValidStatuses =
+            new() { "Pending", "Confirmed", "Shipped", "Delivered", "Cancelled" };
+
+        public async Task<IEnumerable<AdminOrderDto>> GetAllOrdersForAdminAsync()
+        {
+            var orders = await _orderRepository.GetAllOrdersAsync();
+
+            return orders.Select(o => new AdminOrderDto(
+                o.OrderId, o.UserId, o.UserEmail, o.UserFirstName, o.UserLastName,
+                o.Status, o.TotalAmount, o.ShippingAddress, o.CreatedAt
+            ));
+        }
+
+        public Task<bool> UpdateOrderStatusAsync(int orderId, string status)
+        {
+            if (!ValidStatuses.Contains(status))
+                throw new InvalidOperationException(
+                    $"Invalid status '{status}'. Must be one of: {string.Join(", ", ValidStatuses)}.");
+
+            return _orderRepository.UpdateStatusAsync(orderId, status);
+        }
+
+        public async Task<OrderDto> CancelOrderAsync(int userId, int orderId)
+        {
+            await _orderRepository.CancelOrderAsync(orderId, userId);
+
+            return await GetOrderAsync(userId, orderId)
+                ?? throw new InvalidOperationException("Order was cancelled but could not be retrieved.");
+        }
+
+        public async Task<OrderDto> CompletePaymentAsync(int userId, string sessionId)
+        {
+            var status = await _paymentService.GetSessionStatusAsync(sessionId);
+
+            if (status.UserId != userId)
+                throw new InvalidOperationException("This payment session does not belong to you.");
+
+            return await ProcessCompletedPaymentAsync(sessionId, status);
+        }
+
+        public async Task<OrderDto> CompletePaymentFromWebhookAsync(string sessionId)
+        {
+            var status = await _paymentService.GetSessionStatusAsync(sessionId);
+            // No userId check here — the webhook has no caller identity to compare against.
+            // status.UserId (from the session's own metadata) is trusted directly.
+            return await ProcessCompletedPaymentAsync(sessionId, status);
+        }
+
+        private async Task<OrderDto> ProcessCompletedPaymentAsync(string sessionId, PaymentSessionStatus status)
+        {
+            // Idempotency check FIRST — this is what makes it safe for BOTH the redirect confirm
+            // AND the webhook to potentially call this for the same session (a real race is possible:
+            // the customer's browser redirect and Stripe's webhook can arrive within milliseconds of each other).
+            var existingOrder = await _orderRepository.GetByPaymentReferenceAsync(sessionId);
+            if (existingOrder is not null)
+                return await GetOrderAsync(existingOrder.UserId, existingOrder.OrderId)
+                    ?? throw new InvalidOperationException("Order could not be retrieved.");
+
+            if (!status.IsPaid)
+                throw new InvalidOperationException("Payment was not completed.");
+
+            int orderId;
+
+            if (status.Mode == "buynow")
+            {
+                if (status.ProductId is null || status.Quantity is null)
+                    throw new InvalidOperationException("Payment session is missing product details.");
+
+                var product = await _productRepository.GetByIdAsync(status.ProductId.Value)
+                    ?? throw new InvalidOperationException("Product no longer exists.");
+
+                if (product.StockQuantity < status.Quantity.Value)
+                    throw new InvalidOperationException($"Not enough stock for {product.Name}. Payment may need a refund.");
+
+                var orderItems = new List<OrderItemInput> { new(product.ProductId, status.Quantity.Value, product.Price) };
+
+                orderId = await CreateOrderWithRaceProtectionAsync(status.UserId, status.ShippingAddress, orderItems, sessionId);
+            }
+            else
+            {
+                var cart = await _cartRepository.GetByUserIdAsync(status.UserId)
+                    ?? throw new InvalidOperationException("Cart not found.");
+
+                var cartItems = (await _cartItemRepository.GetAllForCartAsync(cart.CartId)).ToList();
+                if (cartItems.Count == 0)
+                    throw new InvalidOperationException("Cart is empty — nothing to fulfill.");
+
+                var orderItems = cartItems
+                    .Select(ci => new OrderItemInput(ci.ProductId, ci.Quantity, ci.UnitPrice))
+                    .ToList();
+
+                orderId = await CreateOrderWithRaceProtectionAsync(status.UserId, status.ShippingAddress, orderItems, sessionId);
+
+                await _cartItemRepository.DeleteAllForCartAsync(cart.CartId);
+            }
+
+            return await GetOrderAsync(status.UserId, orderId)
+                ?? throw new InvalidOperationException("Order created but could not be retrieved.");
+        }
+
+        private async Task<int> CreateOrderWithRaceProtectionAsync(
+            int userId, string shippingAddress, List<OrderItemInput> items, string sessionId)
+        {
+            try
+            {
+                return await _orderRepository.CreateOrderWithItemsAsync(userId, shippingAddress, items, sessionId);
+            }
+            catch
+            {
+                // The unique index on PaymentReference means a genuine race (webhook and redirect-confirm
+                // both slipping past the idempotency check above at nearly the same instant) surfaces here
+                // as a DB constraint violation, not silently creates two orders. If that's what happened,
+                // the other caller already succeeded — look it up and treat this as a success too.
+                var existing = await _orderRepository.GetByPaymentReferenceAsync(sessionId);
+                if (existing is not null)
+                    return existing.OrderId;
+
+                throw;
+            }
+        }
+
+        public async Task<AdminOrderDetailDto?> GetOrderForAdminAsync(int orderId)
+        {
+            var order = await _orderRepository.GetByIdForAdminAsync(orderId);
+            if (order is null) return null;
+
+            var items = await _orderRepository.GetItemsForOrderAsync(orderId);
+
+            var itemDtos = items.Select(i => new OrderItemDto(
+                i.OrderItemId, i.ProductId, i.ProductName, i.ImageUrl,
+                i.Quantity, i.UnitPrice, i.UnitPrice * i.Quantity
+            )).ToList();
+
+            return new AdminOrderDetailDto(
+                order.OrderId, order.UserId, order.UserEmail, order.UserFirstName, order.UserLastName,
+                order.Status, order.TotalAmount, order.ShippingAddress, order.PaymentReference,
+                order.CreatedAt, itemDtos
+            );
+        }
+
+        public Task<bool> DeleteOrderAsync(int orderId) =>
+            _orderRepository.DeleteOrderAsync(orderId);
+    }
+}

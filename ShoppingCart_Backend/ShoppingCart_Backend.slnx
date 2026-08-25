@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="ShoppingCart.API/ShoppingCart.API.csproj" />
+  <Project Path="ShoppingCart.Application/ShoppingCart.Application.csproj" />
+  <Project Path="ShoppingCart.Core/ShoppingCart.Core.csproj" />
+  <Project Path="ShoppingCart.Infrastructure/ShoppingCart.Infrastructure.csproj" />
+  <Project Path="ShoppingCart.UnitTests/ShoppingCart.UnitTests.csproj" />
+</Solution>

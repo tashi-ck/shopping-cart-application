@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".gitignore" />
+  </Folder>
   <Project Path="ShoppingCart.API/ShoppingCart.API.csproj" />
   <Project Path="ShoppingCart.Application/ShoppingCart.Application.csproj" />
   <Project Path="ShoppingCart.Core/ShoppingCart.Core.csproj" />

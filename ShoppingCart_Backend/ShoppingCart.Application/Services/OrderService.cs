@@ -17,19 +17,25 @@ namespace ShoppingCart.Application.Services
         private readonly ICartItemRepository _cartItemRepository;
         private readonly IProductRepository _productRepository;
         private readonly IPaymentService _paymentService;
+        private readonly IUserRepository _userRepository;
+        private readonly IEmailService _emailService;
 
         public OrderService(
             IOrderRepository orderRepository,
             ICartRepository cartRepository,
             ICartItemRepository cartItemRepository,
             IProductRepository productRepository,
-            IPaymentService paymentService)
+            IPaymentService paymentService,
+            IUserRepository userRepository, 
+            IEmailService emailService)
         {
             _orderRepository = orderRepository;
             _cartRepository = cartRepository;
             _cartItemRepository = cartItemRepository;
             _productRepository = productRepository;
             _paymentService = paymentService;
+            _userRepository = userRepository;
+            _emailService = emailService;
         }
 
         public async Task<OrderDto> CheckoutCartAsync(int userId, CheckoutDto dto)
@@ -143,26 +149,19 @@ namespace ShoppingCart.Application.Services
         public async Task<OrderDto> CompletePaymentAsync(int userId, string sessionId)
         {
             var status = await _paymentService.GetSessionStatusAsync(sessionId);
-
             if (status.UserId != userId)
                 throw new InvalidOperationException("This payment session does not belong to you.");
-
             return await ProcessCompletedPaymentAsync(sessionId, status);
         }
 
         public async Task<OrderDto> CompletePaymentFromWebhookAsync(string sessionId)
         {
             var status = await _paymentService.GetSessionStatusAsync(sessionId);
-            // No userId check here — the webhook has no caller identity to compare against.
-            // status.UserId (from the session's own metadata) is trusted directly.
             return await ProcessCompletedPaymentAsync(sessionId, status);
         }
 
         private async Task<OrderDto> ProcessCompletedPaymentAsync(string sessionId, PaymentSessionStatus status)
         {
-            // Idempotency check FIRST — this is what makes it safe for BOTH the redirect confirm
-            // AND the webhook to potentially call this for the same session (a real race is possible:
-            // the customer's browser redirect and Stripe's webhook can arrive within milliseconds of each other).
             var existingOrder = await _orderRepository.GetByPaymentReferenceAsync(sessionId);
             if (existingOrder is not null)
                 return await GetOrderAsync(existingOrder.UserId, existingOrder.OrderId)
@@ -172,6 +171,7 @@ namespace ShoppingCart.Application.Services
                 throw new InvalidOperationException("Payment was not completed.");
 
             int orderId;
+            bool wasNewlyCreated;
 
             if (status.Mode == "buynow")
             {
@@ -185,8 +185,7 @@ namespace ShoppingCart.Application.Services
                     throw new InvalidOperationException($"Not enough stock for {product.Name}. Payment may need a refund.");
 
                 var orderItems = new List<OrderItemInput> { new(product.ProductId, status.Quantity.Value, product.Price) };
-
-                orderId = await CreateOrderWithRaceProtectionAsync(status.UserId, status.ShippingAddress, orderItems, sessionId);
+                (orderId, wasNewlyCreated) = await CreateOrderWithRaceProtectionAsync(status.UserId, status.ShippingAddress, orderItems, sessionId);
             }
             else
             {
@@ -201,33 +200,54 @@ namespace ShoppingCart.Application.Services
                     .Select(ci => new OrderItemInput(ci.ProductId, ci.Quantity, ci.UnitPrice))
                     .ToList();
 
-                orderId = await CreateOrderWithRaceProtectionAsync(status.UserId, status.ShippingAddress, orderItems, sessionId);
-
+                (orderId, wasNewlyCreated) = await CreateOrderWithRaceProtectionAsync(status.UserId, status.ShippingAddress, orderItems, sessionId);
                 await _cartItemRepository.DeleteAllForCartAsync(cart.CartId);
             }
 
-            return await GetOrderAsync(status.UserId, orderId)
+            var orderDto = await GetOrderAsync(status.UserId, orderId)
                 ?? throw new InvalidOperationException("Order created but could not be retrieved.");
+
+            if (wasNewlyCreated)
+            {
+                await TrySendConfirmationEmailAsync(status.UserId, orderDto);
+            }
+
+            return orderDto;
         }
 
-        private async Task<int> CreateOrderWithRaceProtectionAsync(
+        private async Task<(int OrderId, bool WasNewlyCreated)> CreateOrderWithRaceProtectionAsync(
             int userId, string shippingAddress, List<OrderItemInput> items, string sessionId)
         {
             try
             {
-                return await _orderRepository.CreateOrderWithItemsAsync(userId, shippingAddress, items, sessionId);
+                var orderId = await _orderRepository.CreateOrderWithItemsAsync(userId, shippingAddress, items, sessionId);
+                return (orderId, true);
             }
             catch
             {
-                // The unique index on PaymentReference means a genuine race (webhook and redirect-confirm
-                // both slipping past the idempotency check above at nearly the same instant) surfaces here
-                // as a DB constraint violation, not silently creates two orders. If that's what happened,
-                // the other caller already succeeded — look it up and treat this as a success too.
                 var existing = await _orderRepository.GetByPaymentReferenceAsync(sessionId);
                 if (existing is not null)
-                    return existing.OrderId;
+                    return (existing.OrderId, false); // the OTHER caller created it — they'll send the email, not us
 
                 throw;
+            }
+        }
+
+        private async Task TrySendConfirmationEmailAsync(int userId, OrderDto order)
+        {
+            try
+            {
+                var user = await _userRepository.GetByIdAsync(userId);
+                if (user is not null)
+                    await _emailService.SendOrderConfirmationAsync(user.Email, order);
+            }
+            catch (Exception ex)
+            {
+                // Deliberately swallowed: the order itself already succeeded — a flaky email
+                // provider shouldn't roll back a real, paid purchase or fail the webhook
+                // (which would cause Stripe to retry the whole event unnecessarily).
+                // In a production system this would go to a real logger/monitoring tool.
+                Console.WriteLine($"Failed to send order confirmation email for order {order.OrderId}: {ex.Message}");
             }
         }
 

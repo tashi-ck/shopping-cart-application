@@ -50,6 +50,7 @@ builder.Services.AddScoped<IOrderRepository, OrderRepository>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IPaymentService, StripePaymentService>();
 builder.Services.AddScoped<IImageStorageService, S3ImageStorageService>();
+builder.Services.AddScoped<IEmailService, SendGridEmailService>();
 
 // Add services to the container.
 

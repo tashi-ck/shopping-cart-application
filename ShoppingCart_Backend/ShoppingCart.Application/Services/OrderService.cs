@@ -173,35 +173,46 @@ namespace ShoppingCart.Application.Services
             int orderId;
             bool wasNewlyCreated;
 
-            if (status.Mode == "buynow")
+            try
             {
-                if (status.ProductId is null || status.Quantity is null)
-                    throw new InvalidOperationException("Payment session is missing product details.");
+                if (status.Mode == "buynow")
+                {
+                    if (status.ProductId is null || status.Quantity is null)
+                        throw new InvalidOperationException("Payment session is missing product details.");
 
-                var product = await _productRepository.GetByIdAsync(status.ProductId.Value)
-                    ?? throw new InvalidOperationException("Product no longer exists.");
+                    var product = await _productRepository.GetByIdAsync(status.ProductId.Value)
+                        ?? throw new InvalidOperationException("Product no longer exists.");
 
-                if (product.StockQuantity < status.Quantity.Value)
-                    throw new InvalidOperationException($"Not enough stock for {product.Name}. Payment may need a refund.");
+                    if (product.StockQuantity < status.Quantity.Value)
+                        throw new InvalidOperationException($"Not enough stock for {product.Name}.");
 
-                var orderItems = new List<OrderItemInput> { new(product.ProductId, status.Quantity.Value, product.Price) };
-                (orderId, wasNewlyCreated) = await CreateOrderWithRaceProtectionAsync(status.UserId, status.ShippingAddress, orderItems, sessionId);
+                    var orderItems = new List<OrderItemInput> { new(product.ProductId, status.Quantity.Value, product.Price) };
+                    (orderId, wasNewlyCreated) = await CreateOrderWithRaceProtectionAsync(status.UserId, status.ShippingAddress, orderItems, sessionId);
+                }
+                else
+                {
+                    var cart = await _cartRepository.GetByUserIdAsync(status.UserId)
+                        ?? throw new InvalidOperationException("Cart not found.");
+
+                    var cartItems = (await _cartItemRepository.GetAllForCartAsync(cart.CartId)).ToList();
+                    if (cartItems.Count == 0)
+                        throw new InvalidOperationException("Cart is empty — nothing to fulfill.");
+
+                    var orderItems = cartItems
+                        .Select(ci => new OrderItemInput(ci.ProductId, ci.Quantity, ci.UnitPrice))
+                        .ToList();
+
+                    (orderId, wasNewlyCreated) = await CreateOrderWithRaceProtectionAsync(status.UserId, status.ShippingAddress, orderItems, sessionId);
+                    await _cartItemRepository.DeleteAllForCartAsync(cart.CartId);
+                }
             }
-            else
+            catch (InvalidOperationException ex)
             {
-                var cart = await _cartRepository.GetByUserIdAsync(status.UserId)
-                    ?? throw new InvalidOperationException("Cart not found.");
-
-                var cartItems = (await _cartItemRepository.GetAllForCartAsync(cart.CartId)).ToList();
-                if (cartItems.Count == 0)
-                    throw new InvalidOperationException("Cart is empty — nothing to fulfill.");
-
-                var orderItems = cartItems
-                    .Select(ci => new OrderItemInput(ci.ProductId, ci.Quantity, ci.UnitPrice))
-                    .ToList();
-
-                (orderId, wasNewlyCreated) = await CreateOrderWithRaceProtectionAsync(status.UserId, status.ShippingAddress, orderItems, sessionId);
-                await _cartItemRepository.DeleteAllForCartAsync(cart.CartId);
+                // Payment already succeeded on Stripe's side by this point (status.IsPaid was true
+                // above) — if we can't actually fulfill the order for any reason, the customer
+                // shouldn't be left charged with nothing to show for it.
+                await TryRefundAsync(sessionId, ex.Message);
+                throw new InvalidOperationException($"{ex.Message} Your payment has been automatically refunded.");
             }
 
             var orderDto = await GetOrderAsync(status.UserId, orderId)
@@ -227,9 +238,9 @@ namespace ShoppingCart.Application.Services
             {
                 var existing = await _orderRepository.GetByPaymentReferenceAsync(sessionId);
                 if (existing is not null)
-                    return (existing.OrderId, false); // the OTHER caller created it — they'll send the email, not us
+                    return (existing.OrderId, false); // the OTHER concurrent caller created it — not a real failure
 
-                throw;
+                throw; // genuine failure (e.g. stock ran out inside the transaction) — bubbles up to the catch above
             }
         }
 
@@ -268,6 +279,22 @@ namespace ShoppingCart.Application.Services
                 order.Status, order.TotalAmount, order.ShippingAddress, order.PaymentReference,
                 order.CreatedAt, itemDtos
             );
+        }
+
+        private async Task TryRefundAsync(string sessionId, string reason)
+        {
+            try
+            {
+                await _paymentService.RefundAsync(sessionId);
+            }
+            catch (Exception ex)
+            {
+                // Unlike the confirmation email, a FAILED refund is genuinely serious — the
+                // customer is charged with no order and no automatic way to get their money
+                // back. This needs real visibility (a proper logger/alerting in production);
+                // for now it's at least distinctly flagged so it's not missed in the console.
+                Console.WriteLine($"CRITICAL: Refund failed for session {sessionId} (reason: {reason}): {ex.Message}");
+            }
         }
 
         public Task<bool> DeleteOrderAsync(int orderId) =>

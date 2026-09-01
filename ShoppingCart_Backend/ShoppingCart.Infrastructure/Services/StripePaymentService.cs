@@ -1,5 +1,6 @@
 ﻿using ShoppingCart.Application.Interfaces;
 using ShoppingCart.Application.Models;
+using Stripe;
 using Stripe.Checkout;
 using System;
 using System.Collections.Generic;
@@ -65,6 +66,21 @@ namespace ShoppingCart.Infrastructure.Services
             int? quantity = session.Metadata.TryGetValue("quantity", out var qty) ? int.Parse(qty) : null;
 
             return new PaymentSessionStatus(session.PaymentStatus == "paid", userId, shippingAddress, mode, productId, quantity);
+        }
+
+        public async Task RefundAsync(string sessionId)
+        {
+            var sessionService = new Stripe.Checkout.SessionService();
+            var session = await sessionService.GetAsync(sessionId);
+
+            if (string.IsNullOrEmpty(session.PaymentIntentId))
+                throw new InvalidOperationException("No payment found for this session — nothing to refund.");
+
+            var refundService = new RefundService();
+            await refundService.CreateAsync(new RefundCreateOptions
+            {
+                PaymentIntent = session.PaymentIntentId
+            });
         }
     }
 }

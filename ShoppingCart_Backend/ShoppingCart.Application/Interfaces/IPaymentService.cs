@@ -19,5 +19,6 @@ namespace ShoppingCart.Application.Interfaces
         string successUrl, string cancelUrl, Dictionary<string, string>? extraMetadata = null);
 
         Task<PaymentSessionStatus> GetSessionStatusAsync(string sessionId);
+        Task RefundAsync(string sessionId);
     }
 }

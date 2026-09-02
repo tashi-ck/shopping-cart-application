@@ -72,11 +72,11 @@ namespace ShoppingCart.API.Controllers
 
         [HttpPut("admin/{id}/status")]
         [Authorize(Roles = "Admin")]
-        public async Task<IActionResult> UpdateOrderStatus(int id, [FromBody] UpdateOrderStatusDto dto)
+        public async Task<IActionResult> UpdateFulfillmentStatus(int id, [FromBody] UpdateOrderFulfillmentStatusDto dto)
         {
             try
             {
-                var updated = await _orderService.UpdateOrderStatusAsync(id, dto.Status);
+                var updated = await _orderService.UpdateFulfillmentStatusAsync(id, dto.FulfillmentStatus);
                 return updated ? NoContent() : NotFound();
             }
             catch (InvalidOperationException ex)

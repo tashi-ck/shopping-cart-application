@@ -2,14 +2,8 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { PackageSearch, XCircle } from "lucide-react";
 import { getOrders, cancelOrder } from "../api/orderApi";
-
-const statusStyles = {
-  Pending: "bg-gray-100 text-gray-700",
-  Confirmed: "bg-blue-100 text-blue-700",
-  Shipped: "bg-amber-100 text-amber-700",
-  Delivered: "bg-green-100 text-green-700",
-  Cancelled: "bg-red-100 text-red-700",
-};
+import PaymentStatusBadge from "../components/PaymentStatusBadge";
+import { fulfillmentStatusStyles } from "../utils/statusStyles";
 
 export default function OrdersPage() {
   const [orders, setOrders] = useState([]);
@@ -26,15 +20,21 @@ export default function OrdersPage() {
   }, []);
 
   const handleCancel = async (orderId, e) => {
-    e.preventDefault(); // stop the row's Link navigation from firing
+    e.preventDefault();
     e.stopPropagation();
 
     setCancellingId(orderId);
     try {
       const res = await cancelOrder(orderId);
-      setOrders((prev) => prev.map((o) => (o.orderId === orderId ? { ...o, status: res.data.status } : o)));
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.orderId === orderId
+            ? { ...o, fulfillmentStatus: res.data.fulfillmentStatus, paymentStatus: res.data.paymentStatus }
+            : o
+        )
+      );
     } catch {
-      // silently ignored here — the detail page is the reliable place to see the real error message
+      // silently ignored here — the detail page shows the real error message
     } finally {
       setCancellingId(null);
       setConfirmingCancelId(null);
@@ -69,19 +69,28 @@ export default function OrdersPage() {
           >
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-medium text-gray-900">Order #{order.orderId}</span>
-              <span className={`text-xs font-medium px-2 py-1 rounded-full ${statusStyles[order.status] ?? "bg-gray-100 text-gray-700"}`}>
-                {order.status}
-              </span>
+              <div className="flex gap-1.5">
+                <span
+                  className={`text-xs font-medium px-2 py-1 rounded-full ${
+                    fulfillmentStatusStyles[order.fulfillmentStatus] ?? "bg-gray-100 text-gray-700"
+                  }`}
+                >
+                  {order.fulfillmentStatus}
+                </span>
+                <PaymentStatusBadge status={order.paymentStatus} />
+              </div>
             </div>
+
             <p className="text-xs text-gray-400 mb-2">
               {new Date(order.createdAt).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}
             </p>
+
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-500">{order.items.length} {order.items.length === 1 ? "item" : "items"}</span>
               <span className="font-semibold text-gray-900">${order.totalAmount.toFixed(2)}</span>
             </div>
 
-            {order.status === "Pending" && (
+            {order.fulfillmentStatus === "Confirmed" && (
               <div className="mt-3 pt-3 border-t border-gray-100">
                 {confirmingCancelId === order.orderId ? (
                   <div className="flex items-center gap-2">

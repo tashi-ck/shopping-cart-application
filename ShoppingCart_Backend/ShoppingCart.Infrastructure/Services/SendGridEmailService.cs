@@ -92,5 +92,51 @@ namespace ShoppingCart.Infrastructure.Services
             </div>
             """;
         }
+
+        public async Task SendOrderStatusUpdateAsync(string toEmail, OrderDto order, string previousStatus)
+        {
+            var client = new SendGridClient(_apiKey);
+            var from = new EmailAddress(_fromEmail, _fromName);
+            var to = new EmailAddress(toEmail);
+            var subject = $"Order #{order.OrderId} — {order.Status}";
+
+            var (headline, message) = GetStatusContent(order.Status);
+
+            var htmlContent = $"""
+        <div style="font-family:sans-serif;max-width:480px;margin:auto;">
+            <h2 style="color:#111;">{headline}</h2>
+            <p style="color:#555;">{message}</p>
+            <p style="color:#333;">
+                <strong>Order #{order.OrderId}</strong><br/>
+                Status: {previousStatus} → <strong>{order.Status}</strong>
+            </p>
+            <p style="color:#555;">
+                <strong>Shipping to:</strong><br/>{order.ShippingAddress}
+            </p>
+            <p style="color:#333;font-weight:bold;">Total: ${order.TotalAmount:F2}</p>
+        </div>
+        """;
+
+            var plainTextContent =
+                $"{headline}\n\n{message}\n\nOrder #{order.OrderId}\nStatus: {previousStatus} -> {order.Status}\n\nTotal: ${order.TotalAmount:F2}";
+
+            var msg = MailHelper.CreateSingleEmail(from, to, subject, plainTextContent, htmlContent);
+            var response = await client.SendEmailAsync(msg);
+
+            if ((int)response.StatusCode >= 300)
+            {
+                var body = await response.Body.ReadAsStringAsync();
+                throw new InvalidOperationException($"SendGrid failed ({response.StatusCode}): {body}");
+            }
+        }
+
+        private static (string Headline, string Message) GetStatusContent(string status) => status switch
+        {
+            "Confirmed" => ("Your order is confirmed", "We've confirmed your order and it's being prepared."),
+            "Shipped" => ("Your order has shipped", "Your order is on its way to you."),
+            "Delivered" => ("Your order has been delivered", "Your order has arrived. We hope you enjoy it!"),
+            "Cancelled" => ("Your order was cancelled", "This order has been cancelled and any charge will be refunded if applicable."),
+            _ => ($"Order status: {status}", "Your order's status has been updated.")
+        };
     }
 }

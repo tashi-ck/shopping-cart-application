@@ -10,5 +10,6 @@ namespace ShoppingCart.Application.Interfaces
     public interface IEmailService
     {
         Task SendOrderConfirmationAsync(string toEmail, OrderDto order);
+        Task SendOrderStatusUpdateAsync(string toEmail, OrderDto order, string previousStatus);
     }
 }

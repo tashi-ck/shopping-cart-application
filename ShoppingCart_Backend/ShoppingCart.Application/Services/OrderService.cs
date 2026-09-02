@@ -129,18 +129,63 @@ namespace ShoppingCart.Application.Services
             ));
         }
 
-        public Task<bool> UpdateOrderStatusAsync(int orderId, string status)
+        public async Task<bool> UpdateOrderStatusAsync(int orderId, string status)
         {
             if (!ValidStatuses.Contains(status))
                 throw new InvalidOperationException(
                     $"Invalid status '{status}'. Must be one of: {string.Join(", ", ValidStatuses)}.");
 
-            return _orderRepository.UpdateStatusAsync(orderId, status);
+            var order = await _orderRepository.GetByIdForAdminAsync(orderId)
+                ?? throw new InvalidOperationException("Order not found.");
+
+            var previousStatus = order.Status;
+            if (previousStatus == status)
+                return true; // no actual change — don't send a pointless "your order is still Pending" email
+
+            var updated = await _orderRepository.UpdateStatusAsync(orderId, status);
+
+            if (updated)
+            {
+                await TrySendStatusUpdateEmailAsync(order.UserId, orderId, previousStatus, status);
+            }
+
+            return updated;
+        }
+
+        private async Task TrySendStatusUpdateEmailAsync(int userId, int orderId, string previousStatus, string newStatus)
+        {
+            // "Pending" only ever appears as an order's STARTING status, never something it
+            // transitions TO — and that moment is already covered by the order confirmation
+            // email, so skip sending a redundant one here.
+            if (newStatus == "Pending") return;
+
+            try
+            {
+                var user = await _userRepository.GetByIdAsync(userId);
+                if (user is null) return;
+
+                var orderDto = await GetOrderAsync(userId, orderId);
+                if (orderDto is null) return;
+
+                await _emailService.SendOrderStatusUpdateAsync(user.Email, orderDto, previousStatus);
+            }
+            catch (Exception ex)
+            {
+                // Same reasoning as the order confirmation email: a status change that already
+                // succeeded in the database shouldn't fail or roll back over a flaky email send.
+                Console.WriteLine($"Failed to send status update email for order {orderId}: {ex.Message}");
+            }
         }
 
         public async Task<OrderDto> CancelOrderAsync(int userId, int orderId)
         {
+            var orderBeforeCancel = await GetOrderAsync(userId, orderId)
+                ?? throw new InvalidOperationException("Order not found.");
+            var previousStatus = orderBeforeCancel.Status;
+
             await _orderRepository.CancelOrderAsync(orderId, userId);
+
+            await TrySendStatusUpdateEmailAsync(userId, orderId, previousStatus, "Cancelled");
 
             return await GetOrderAsync(userId, orderId)
                 ?? throw new InvalidOperationException("Order was cancelled but could not be retrieved.");

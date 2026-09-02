@@ -38,6 +38,9 @@ namespace ShoppingCart.Application.Services
             _emailService = emailService;
         }
 
+        private static readonly HashSet<string> ValidFulfillmentStatuses =
+            new() { "Confirmed", "Shipped", "Delivered", "Cancelled" }; // Pending removed — no longer a valid target
+
         public async Task<OrderDto> CheckoutCartAsync(int userId, CheckoutDto dto)
         {
             var cart = await _cartRepository.GetByUserIdAsync(userId)
@@ -113,7 +116,7 @@ namespace ShoppingCart.Application.Services
                 i.Quantity, i.UnitPrice, i.UnitPrice * i.Quantity
             )).ToList();
 
-            return new OrderDto(order.OrderId, order.Status, order.TotalAmount, order.ShippingAddress, order.CreatedAt, itemDtos);
+            return new OrderDto(order.OrderId, order.FulfillmentStatus, order.PaymentStatus, order.TotalAmount, order.ShippingAddress, order.CreatedAt, itemDtos);
         }
 
         private static readonly HashSet<string> ValidStatuses =
@@ -125,40 +128,33 @@ namespace ShoppingCart.Application.Services
 
             return orders.Select(o => new AdminOrderDto(
                 o.OrderId, o.UserId, o.UserEmail, o.UserFirstName, o.UserLastName,
-                o.Status, o.TotalAmount, o.ShippingAddress, o.CreatedAt
+                o.FulfillmentStatus, o.PaymentStatus, o.TotalAmount, o.ShippingAddress, o.CreatedAt
             ));
         }
 
-        public async Task<bool> UpdateOrderStatusAsync(int orderId, string status)
+        public async Task<bool> UpdateFulfillmentStatusAsync(int orderId, string fulfillmentStatus)
         {
-            if (!ValidStatuses.Contains(status))
+            if (!ValidFulfillmentStatuses.Contains(fulfillmentStatus))
                 throw new InvalidOperationException(
-                    $"Invalid status '{status}'. Must be one of: {string.Join(", ", ValidStatuses)}.");
+                    $"Invalid status '{fulfillmentStatus}'. Must be one of: {string.Join(", ", ValidFulfillmentStatuses)}.");
 
             var order = await _orderRepository.GetByIdForAdminAsync(orderId)
                 ?? throw new InvalidOperationException("Order not found.");
 
-            var previousStatus = order.Status;
-            if (previousStatus == status)
-                return true; // no actual change — don't send a pointless "your order is still Pending" email
+            var previousStatus = order.FulfillmentStatus;
+            if (previousStatus == fulfillmentStatus)
+                return true; // no real change — skip the redundant email
 
-            var updated = await _orderRepository.UpdateStatusAsync(orderId, status);
+            var updated = await _orderRepository.UpdateFulfillmentStatusAsync(orderId, fulfillmentStatus);
 
             if (updated)
-            {
-                await TrySendStatusUpdateEmailAsync(order.UserId, orderId, previousStatus, status);
-            }
+                await TrySendStatusUpdateEmailAsync(order.UserId, orderId, previousStatus, fulfillmentStatus);
 
             return updated;
         }
 
         private async Task TrySendStatusUpdateEmailAsync(int userId, int orderId, string previousStatus, string newStatus)
         {
-            // "Pending" only ever appears as an order's STARTING status, never something it
-            // transitions TO — and that moment is already covered by the order confirmation
-            // email, so skip sending a redundant one here.
-            if (newStatus == "Pending") return;
-
             try
             {
                 var user = await _userRepository.GetByIdAsync(userId);
@@ -171,19 +167,47 @@ namespace ShoppingCart.Application.Services
             }
             catch (Exception ex)
             {
-                // Same reasoning as the order confirmation email: a status change that already
-                // succeeded in the database shouldn't fail or roll back over a flaky email send.
                 Console.WriteLine($"Failed to send status update email for order {orderId}: {ex.Message}");
             }
+        }
+
+        public async Task HandleRefundWebhookAsync(string paymentIntentId)
+        {
+            var order = await _orderRepository.GetByPaymentIntentIdAsync(paymentIntentId);
+            if (order is null) return; // not one of ours, or already handled — safe to ignore
+
+            if (order.PaymentStatus == "Refunded") return; // already reflected — avoid a duplicate email on webhook retries
+
+            await _orderRepository.UpdatePaymentStatusAsync(order.OrderId, "Refunded");
+            await TrySendStatusUpdateEmailAsync(order.UserId, order.OrderId, order.FulfillmentStatus, order.FulfillmentStatus);
         }
 
         public async Task<OrderDto> CancelOrderAsync(int userId, int orderId)
         {
             var orderBeforeCancel = await GetOrderAsync(userId, orderId)
                 ?? throw new InvalidOperationException("Order not found.");
-            var previousStatus = orderBeforeCancel.Status;
+            var previousStatus = orderBeforeCancel.FulfillmentStatus;
 
             await _orderRepository.CancelOrderAsync(orderId, userId);
+
+            // Cancellation implies the customer shouldn't stay charged — refund automatically,
+            // reusing the same refund mechanism built for the checkout race-condition case.
+            if (orderBeforeCancel.PaymentStatus == "Paid")
+            {
+                var order = await _orderRepository.GetByIdAsync(orderId, userId);
+                if (order?.PaymentReference is not null)
+                {
+                    try
+                    {
+                        await _paymentService.RefundAsync(order.PaymentReference);
+                        await _orderRepository.UpdatePaymentStatusAsync(orderId, "Refunded");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"CRITICAL: Refund failed for cancelled order {orderId}: {ex.Message}");
+                    }
+                }
+            }
 
             await TrySendStatusUpdateEmailAsync(userId, orderId, previousStatus, "Cancelled");
 
@@ -232,7 +256,7 @@ namespace ShoppingCart.Application.Services
                         throw new InvalidOperationException($"Not enough stock for {product.Name}.");
 
                     var orderItems = new List<OrderItemInput> { new(product.ProductId, status.Quantity.Value, product.Price) };
-                    (orderId, wasNewlyCreated) = await CreateOrderWithRaceProtectionAsync(status.UserId, status.ShippingAddress, orderItems, sessionId);
+                    (orderId, wasNewlyCreated) = await CreateOrderWithRaceProtectionAsync(status.UserId, status.ShippingAddress, orderItems, sessionId, status.PaymentIntentId);
                 }
                 else
                 {
@@ -247,7 +271,7 @@ namespace ShoppingCart.Application.Services
                         .Select(ci => new OrderItemInput(ci.ProductId, ci.Quantity, ci.UnitPrice))
                         .ToList();
 
-                    (orderId, wasNewlyCreated) = await CreateOrderWithRaceProtectionAsync(status.UserId, status.ShippingAddress, orderItems, sessionId);
+                    (orderId, wasNewlyCreated) = await CreateOrderWithRaceProtectionAsync(status.UserId, status.ShippingAddress, orderItems, sessionId, status.PaymentIntentId);
                     await _cartItemRepository.DeleteAllForCartAsync(cart.CartId);
                 }
             }
@@ -272,20 +296,19 @@ namespace ShoppingCart.Application.Services
         }
 
         private async Task<(int OrderId, bool WasNewlyCreated)> CreateOrderWithRaceProtectionAsync(
-            int userId, string shippingAddress, List<OrderItemInput> items, string sessionId)
+            int userId, string shippingAddress, List<OrderItemInput> items, string sessionId, string? paymentIntentId)
         {
             try
             {
-                var orderId = await _orderRepository.CreateOrderWithItemsAsync(userId, shippingAddress, items, sessionId);
+                var orderId = await _orderRepository.CreateOrderWithItemsAsync(userId, shippingAddress, items, sessionId, paymentIntentId);
                 return (orderId, true);
             }
             catch
             {
                 var existing = await _orderRepository.GetByPaymentReferenceAsync(sessionId);
                 if (existing is not null)
-                    return (existing.OrderId, false); // the OTHER concurrent caller created it — not a real failure
-
-                throw; // genuine failure (e.g. stock ran out inside the transaction) — bubbles up to the catch above
+                    return (existing.OrderId, false);
+                throw;
             }
         }
 
@@ -321,7 +344,7 @@ namespace ShoppingCart.Application.Services
 
             return new AdminOrderDetailDto(
                 order.OrderId, order.UserId, order.UserEmail, order.UserFirstName, order.UserLastName,
-                order.Status, order.TotalAmount, order.ShippingAddress, order.PaymentReference,
+                order.FulfillmentStatus, order.PaymentStatus, order.TotalAmount, order.ShippingAddress, order.PaymentReference,
                 order.CreatedAt, itemDtos
             );
         }

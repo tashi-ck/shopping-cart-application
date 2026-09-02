@@ -55,7 +55,7 @@ namespace ShoppingCart.Infrastructure.Services
 
         public async Task<PaymentSessionStatus> GetSessionStatusAsync(string sessionId)
         {
-            var service = new SessionService();
+            var service = new Stripe.Checkout.SessionService();
             var session = await service.GetAsync(sessionId);
 
             var userId = int.Parse(session.Metadata["userId"]);
@@ -65,7 +65,10 @@ namespace ShoppingCart.Infrastructure.Services
             int? productId = session.Metadata.TryGetValue("productId", out var pid) ? int.Parse(pid) : null;
             int? quantity = session.Metadata.TryGetValue("quantity", out var qty) ? int.Parse(qty) : null;
 
-            return new PaymentSessionStatus(session.PaymentStatus == "paid", userId, shippingAddress, mode, productId, quantity);
+            return new PaymentSessionStatus(
+                session.PaymentStatus == "paid", userId, shippingAddress, mode, productId, quantity,
+                session.PaymentIntentId // already present on the Session object, no extra API call needed
+            );
         }
 
         public async Task RefundAsync(string sessionId)

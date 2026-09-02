@@ -98,9 +98,9 @@ namespace ShoppingCart.Infrastructure.Services
             var client = new SendGridClient(_apiKey);
             var from = new EmailAddress(_fromEmail, _fromName);
             var to = new EmailAddress(toEmail);
-            var subject = $"Order #{order.OrderId} — {order.Status}";
+            var subject = $"Order #{order.OrderId} — {order.FulfillmentStatus}";
 
-            var (headline, message) = GetStatusContent(order.Status);
+            var (headline, message) = GetStatusContent(order.FulfillmentStatus);
 
             var htmlContent = $"""
         <div style="font-family:sans-serif;max-width:480px;margin:auto;">
@@ -108,7 +108,7 @@ namespace ShoppingCart.Infrastructure.Services
             <p style="color:#555;">{message}</p>
             <p style="color:#333;">
                 <strong>Order #{order.OrderId}</strong><br/>
-                Status: {previousStatus} → <strong>{order.Status}</strong>
+                Status: {previousStatus} → <strong>{order.FulfillmentStatus}</strong>
             </p>
             <p style="color:#555;">
                 <strong>Shipping to:</strong><br/>{order.ShippingAddress}
@@ -118,7 +118,7 @@ namespace ShoppingCart.Infrastructure.Services
         """;
 
             var plainTextContent =
-                $"{headline}\n\n{message}\n\nOrder #{order.OrderId}\nStatus: {previousStatus} -> {order.Status}\n\nTotal: ${order.TotalAmount:F2}";
+                $"{headline}\n\n{message}\n\nOrder #{order.OrderId}\nStatus: {previousStatus} -> {order.FulfillmentStatus}\n\nTotal: ${order.TotalAmount:F2}";
 
             var msg = MailHelper.CreateSingleEmail(from, to, subject, plainTextContent, htmlContent);
             var response = await client.SendEmailAsync(msg);

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { ArrowLeft, MapPin, User, CreditCard, Trash2 } from "lucide-react";
-import { getOrderForAdmin, updateOrderStatus, deleteOrder } from "../../api/orderApi";
+import PaymentStatusBadge from "../../components/PaymentStatusBadge";
+import { updateOrderFulfillmentStatus, deleteOrder, getOrderForAdmin } from "../../api/orderApi";
 import InlineStatusBadge from "../../components/admin/InlineStatusBadge";
 
 export default function AdminOrderDetailPage() {
@@ -26,18 +27,18 @@ export default function AdminOrderDetailPage() {
   }, [id]);
 
   const handleStatusChange = async (newStatus) => {
-    const previousStatus = order.status;
-    setUpdating(true);
-    setOrder((prev) => ({ ...prev, status: newStatus }));
+  const previousStatus = order.fulfillmentStatus;
+  setUpdating(true);
+  setOrder((prev) => ({ ...prev, fulfillmentStatus: newStatus }));
 
-    try {
-      await updateOrderStatus(id, newStatus);
-    } catch {
-      setOrder((prev) => ({ ...prev, status: previousStatus }));
-    } finally {
-      setUpdating(false);
-    }
-  };
+  try {
+    await updateOrderFulfillmentStatus(id, newStatus);
+  } catch {
+    setOrder((prev) => ({ ...prev, fulfillmentStatus: previousStatus }));
+  } finally {
+    setUpdating(false);
+  }
+};
 
   const handleDelete = async () => {
     setDeleteError("");
@@ -77,9 +78,12 @@ export default function AdminOrderDetailPage() {
       </button>
 
       <div className="flex items-center justify-between mb-1">
-        <h1 className="text-2xl font-semibold text-gray-900">Order #{order.orderId}</h1>
-        <InlineStatusBadge value={order.status} disabled={updating} onChange={handleStatusChange} />
-      </div>
+  <h1 className="text-2xl font-semibold text-gray-900">Order #{order.orderId}</h1>
+  <div className="flex gap-2">
+    <PaymentStatusBadge status={order.paymentStatus} />
+    <InlineStatusBadge value={order.fulfillmentStatus} disabled={updating} onChange={handleStatusChange} />
+  </div>
+</div>
       <p className="text-sm text-gray-400 mb-6">
         Placed {new Date(order.createdAt).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}
       </p>

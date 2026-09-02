@@ -9,8 +9,9 @@ namespace ShoppingCart.Application.Interfaces
 {
     public record CheckoutSessionResult(string SessionId, string Url);
     public record PaymentSessionStatus(
-        bool IsPaid, int UserId, string ShippingAddress,
-        string Mode, int? ProductId, int? Quantity);
+         bool IsPaid, int UserId, string ShippingAddress,
+         string Mode, int? ProductId, int? Quantity, string? PaymentIntentId
+    );
 
     public interface IPaymentService
     {

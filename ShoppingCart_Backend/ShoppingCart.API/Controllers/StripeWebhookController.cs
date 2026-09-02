@@ -52,16 +52,20 @@ namespace ShoppingCart.API.Controllers
                     }
                     catch (InvalidOperationException ex)
                     {
-                        // Log and return 500 so Stripe retries automatically (with backoff, over several days) —
-                        // appropriate for transient issues (a brief DB hiccup). A genuinely malformed/impossible
-                        // event would keep failing identically on every retry, which is visible in Stripe's dashboard.
                         _logger.LogError(ex, "Failed to process webhook for session {SessionId}", session.Id);
                         return StatusCode(500);
                     }
                 }
             }
+            else if (stripeEvent.Type == "charge.refunded")
+            {
+                var charge = stripeEvent.Data.Object as Charge;
+                if (charge?.PaymentIntentId is not null)
+                {
+                    await _orderService.HandleRefundWebhookAsync(charge.PaymentIntentId);
+                }
+            }
 
-            // Any other event type (Stripe sends many kinds) — acknowledge receipt, do nothing.
             return Ok();
         }
     }

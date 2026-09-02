@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getAllOrdersForAdmin, updateOrderStatus } from "../../api/orderApi";
+import { getAllOrdersForAdmin, updateOrderFulfillmentStatus} from "../../api/orderApi";
 import InlineStatusBadge from "../../components/admin/InlineStatusBadge";
+import PaymentStatusBadge from "../../components/PaymentStatusBadge";
 
 export default function AdminOrdersPage() {
   const navigate = useNavigate();
@@ -28,11 +29,11 @@ export default function AdminOrdersPage() {
 
     setUpdatingId(orderId);
     setOrders((prev) =>
-      prev.map((o) => (o.orderId === orderId ? { ...o, status: newStatus } : o))
+      prev.map((o) => (o.orderId === orderId ? { ...o, fulfillmentStatus: newStatus } : o))
     );
 
     try {
-      await updateOrderStatus(orderId, newStatus);
+      await updateOrderFulfillmentStatus(orderId, newStatus);
     } catch (err) {
       setOrders(previousOrders);
     } finally {
@@ -62,40 +63,44 @@ export default function AdminOrdersPage() {
         ) : (
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
-              <tr>
-                <th className="text-left p-3">Order</th>
-                <th className="text-left p-3">Customer</th>
-                <th className="text-left p-3">Date</th>
-                <th className="text-left p-3">Total</th>
-                <th className="text-left p-3">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {orders.map((order) => (
-                <tr
-                  key={order.orderId}
-                  onClick={() => navigate(`/admin/orders/${order.orderId}`)}
-                  className="border-b border-gray-100 last:border-0 hover:bg-gray-50 cursor-pointer transition"
-                >
-                  <td className="p-3 font-medium text-gray-900">#{order.orderId}</td>
-                  <td className="p-3">
-                    <p className="text-gray-900">{customerName(order)}</p>
-                    <p className="text-xs text-gray-400">{order.userEmail}</p>
-                  </td>
-                  <td className="p-3 text-gray-500">
-                    {new Date(order.createdAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
-                  </td>
-                  <td className="p-3 text-gray-900 font-medium">${order.totalAmount.toFixed(2)}</td>
-                  <td className="p-3" onClick={(e) => e.stopPropagation()}>
-                    <InlineStatusBadge
-                      value={order.status}
-                      disabled={updatingId === order.orderId}
-                      onChange={(newStatus) => handleStatusChange(order.orderId, newStatus)}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
+  <tr>
+    <th className="text-left p-3">Order</th>
+    <th className="text-left p-3">Customer</th>
+    <th className="text-left p-3">Date</th>
+    <th className="text-left p-3">Total</th>
+    <th className="text-left p-3">Payment</th>
+    <th className="text-left p-3">Fulfillment</th>
+  </tr>
+</thead>
+<tbody>
+  {orders.map((order) => (
+    <tr
+      key={order.orderId}
+      onClick={() => navigate(`/admin/orders/${order.orderId}`)}
+      className="border-b border-gray-100 last:border-0 hover:bg-gray-50 cursor-pointer transition"
+    >
+      <td className="p-3 font-medium text-gray-900">#{order.orderId}</td>
+      <td className="p-3">
+        <p className="text-gray-900">{customerName(order)}</p>
+        <p className="text-xs text-gray-400">{order.userEmail}</p>
+      </td>
+      <td className="p-3 text-gray-500">
+        {new Date(order.createdAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
+      </td>
+      <td className="p-3 text-gray-900 font-medium">${order.totalAmount.toFixed(2)}</td>
+      <td className="p-3" onClick={(e) => e.stopPropagation()}>
+        <PaymentStatusBadge status={order.paymentStatus} />
+      </td>
+      <td className="p-3" onClick={(e) => e.stopPropagation()}>
+        <InlineStatusBadge
+          value={order.fulfillmentStatus}
+          disabled={updatingId === order.orderId}
+          onChange={(newStatus) => handleStatusChange(order.orderId, newStatus)}
+        />
+      </td>
+    </tr>
+  ))}
+</tbody>
           </table>
         )}
       </div>

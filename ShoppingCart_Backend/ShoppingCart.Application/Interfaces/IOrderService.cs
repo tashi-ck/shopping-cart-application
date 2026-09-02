@@ -14,7 +14,8 @@ namespace ShoppingCart.Application.Interfaces
         Task<IEnumerable<OrderDto>> GetOrdersForUserAsync(int userId);
         Task<OrderDto?> GetOrderAsync(int userId, int orderId);
         Task<IEnumerable<AdminOrderDto>> GetAllOrdersForAdminAsync();
-        Task<bool> UpdateOrderStatusAsync(int orderId, string status);
+        Task<bool> UpdateFulfillmentStatusAsync(int orderId, string fulfillmentStatus);
+        Task HandleRefundWebhookAsync(string paymentIntentId);
         Task<OrderDto> CancelOrderAsync(int userId, int orderId);
         Task<OrderDto> CompletePaymentAsync(int userId, string sessionId);
         Task<AdminOrderDetailDto?> GetOrderForAdminAsync(int orderId);

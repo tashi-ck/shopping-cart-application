@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { useParams, useLocation, Link } from "react-router-dom";
 import { CheckCircle2, ArrowLeft, MapPin, XCircle } from "lucide-react";
 import { getOrder, cancelOrder } from "../api/orderApi";
+import PaymentStatusBadge from "../components/PaymentStatusBadge";
+import { fulfillmentStatusStyles } from "../utils/statusStyles";
 
 const statusStyles = {
   Pending: "bg-gray-100 text-gray-700",
@@ -59,7 +61,7 @@ export default function OrderDetailPage() {
     );
   }
 
-  const canCancel = order.status === "Pending";
+const canCancel = order.fulfillmentStatus === "Confirmed";
 
   return (
     <div className="max-w-2xl">
@@ -75,9 +77,12 @@ export default function OrderDetailPage() {
 
       <div className="flex items-center justify-between mb-1">
         <h1 className="text-2xl font-semibold text-gray-900">Order #{order.orderId}</h1>
-        <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${statusStyles[order.status] ?? "bg-gray-100 text-gray-700"}`}>
-          {order.status}
-        </span>
+        <div className="flex gap-2">
+          <PaymentStatusBadge status={order.paymentStatus} />
+          <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${fulfillmentStatusStyles[order.fulfillmentStatus] ?? "bg-gray-100 text-gray-700"}`}>
+            {order.fulfillmentStatus}
+          </span>
+        </div>
       </div>
       <p className="text-sm text-gray-400 mb-6">
         Placed {new Date(order.createdAt).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}

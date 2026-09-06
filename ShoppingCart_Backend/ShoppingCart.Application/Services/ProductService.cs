@@ -12,6 +12,7 @@ namespace ShoppingCart.Application.Services
     public class ProductService : IProductService
     {
         private readonly IProductRepository _productRepository;
+        private readonly ILowStockAlertService _lowStockAlertService;
         public ProductService(IProductRepository productRepository) => _productRepository = productRepository;
 
         public async Task<IEnumerable<ProductDto>> GetAllProductsAsync(int? categoryId, string? search, string? sortBy, bool includeInactive = false)
@@ -48,8 +49,13 @@ namespace ShoppingCart.Application.Services
             return MapToDto(withCategory);
         }
 
-        public Task<bool> UpdateProductAsync(int productId, UpdateProductDto dto)
+        public async Task<bool> UpdateProductAsync(int productId, UpdateProductDto dto)
         {
+            var existing = await _productRepository.GetByIdAsync(productId)
+                ?? throw new InvalidOperationException("Product not found.");
+
+            var previousStock = existing.StockQuantity;
+
             var product = new Product
             {
                 ProductId = productId,
@@ -61,7 +67,14 @@ namespace ShoppingCart.Application.Services
                 ImageUrl = dto.ImageUrl
             };
 
-            return _productRepository.UpdateAsync(product);
+            var updated = await _productRepository.UpdateAsync(product);
+
+            if (updated)
+            {
+                await _lowStockAlertService.CheckAndNotifyAsync(productId, dto.Name, previousStock, dto.StockQuantity);
+            }
+
+            return updated;
         }
 
         public Task<bool> DeleteProductAsync(int productId) =>

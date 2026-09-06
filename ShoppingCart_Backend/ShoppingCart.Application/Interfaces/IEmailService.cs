@@ -11,5 +11,6 @@ namespace ShoppingCart.Application.Interfaces
     {
         Task SendOrderConfirmationAsync(string toEmail, OrderDto order);
         Task SendOrderStatusUpdateAsync(string toEmail, OrderDto order, string previousStatus);
+        Task SendLowStockAlertAsync(string toEmail, string productName, int currentStock, int threshold);
     }
 }

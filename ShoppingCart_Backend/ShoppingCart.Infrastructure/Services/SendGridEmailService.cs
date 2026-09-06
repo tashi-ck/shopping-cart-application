@@ -138,5 +138,33 @@ namespace ShoppingCart.Infrastructure.Services
             "Cancelled" => ("Your order was cancelled", "This order has been cancelled and any charge will be refunded if applicable."),
             _ => ($"Order status: {status}", "Your order's status has been updated.")
         };
+
+        public async Task SendLowStockAlertAsync(string toEmail, string productName, int currentStock, int threshold)
+        {
+            var client = new SendGridClient(_apiKey);
+            var from = new EmailAddress(_fromEmail, _fromName);
+            var to = new EmailAddress(toEmail);
+            var subject = $"Low stock alert — {productName}";
+
+            var htmlContent = $"""
+                <div style="font-family:sans-serif;max-width:480px;margin:auto;">
+                    <h2 style="color:#b45309;">Low stock alert</h2>
+                    <p style="color:#555;">
+                     <strong>{productName}</strong> has dropped to <strong>{currentStock}</strong> units
+                     (threshold: {threshold}). Consider restocking soon.
+                    </p>
+                </div>
+                """;
+            var plainTextContent = $"Low stock alert: {productName} has dropped to {currentStock} units (threshold: {threshold}).";
+
+            var msg = MailHelper.CreateSingleEmail(from, to, subject, plainTextContent, htmlContent);
+            var response = await client.SendEmailAsync(msg);
+
+            if ((int)response.StatusCode >= 300)
+            {
+                var body = await response.Body.ReadAsStringAsync();
+                throw new InvalidOperationException($"SendGrid failed ({response.StatusCode}): {body}");
+            }
+        }
     }
 }

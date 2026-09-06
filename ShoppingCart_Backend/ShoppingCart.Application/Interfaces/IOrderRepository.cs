@@ -10,7 +10,7 @@ namespace ShoppingCart.Application.Interfaces
 {
     public interface IOrderRepository
     {
-        Task<int> CreateOrderWithItemsAsync(int userId, string shippingAddress, List<OrderItemInput> items, string? paymentReference = null, string? paymentIntentId = null);
+        Task<(int OrderId, List<StockChangeInfo> StockChanges)> CreateOrderWithItemsAsync(int userId, string shippingAddress, List<OrderItemInput> items,string? paymentReference = null, string? paymentIntentId = null);
         Task<IEnumerable<Order>> GetAllForUserAsync(int userId);
         Task<Order?> GetByIdAsync(int orderId, int userId);
         Task<IEnumerable<OrderItemWithProduct>> GetItemsForOrderAsync(int orderId);

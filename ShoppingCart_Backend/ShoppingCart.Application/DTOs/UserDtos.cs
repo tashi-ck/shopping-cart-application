@@ -20,7 +20,8 @@ namespace ShoppingCart.Application.DTOs
             string Auth0Id, 
             string Email, 
             string? FirstName, 
-            string? LastName
+            string? LastName, 
+            List<string> Roles
         );
 
         public record UpdateUserDto(string FirstName, string LastName, string Email);
@@ -31,5 +32,6 @@ namespace ShoppingCart.Application.DTOs
         );
 
         public record SetUserActiveDto(bool IsActive);
+
     }
 }

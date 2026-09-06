@@ -21,8 +21,9 @@ namespace ShoppingCart.API.Controllers
             var email = User.FindFirst($"{ClaimsNamespace}/email")?.Value ?? string.Empty;
             var firstName = User.FindFirst($"{ClaimsNamespace}/given_name")?.Value;
             var lastName = User.FindFirst($"{ClaimsNamespace}/family_name")?.Value;
+            var roles = User.FindAll($"{ClaimsNamespace}/roles").Select(c => c.Value).ToList();
 
-            return new Auth0ProfileDto(auth0Id, email, firstName, lastName);
+            return new Auth0ProfileDto(auth0Id, email, firstName, lastName, roles);
         }
 
         // Every write to Cart/Orders needs the LOCAL UserId, not the Auth0 sub string —

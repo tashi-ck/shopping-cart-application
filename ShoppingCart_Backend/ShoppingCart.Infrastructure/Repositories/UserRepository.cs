@@ -19,11 +19,9 @@ namespace ShoppingCart.Infrastructure.Repositories
         {
             using var connection = _connectionFactory.CreateConnection();
             const string sql = """
-            SELECT "UserId", "Auth0Id", "Email", "FirstName", "LastName", "CreatedAt", "UpdatedAt"
-            FROM "Users"
-            WHERE "Auth0Id" = @Auth0Id
-            """;
-
+                SELECT "UserId", "Auth0Id", "Email", "FirstName", "LastName", "IsActive", "IsAdmin", "CreatedAt", "UpdatedAt"
+                FROM "Users" WHERE "Auth0Id" = @Auth0Id
+                """;
             return await connection.QuerySingleOrDefaultAsync<User>(sql, new { Auth0Id = auth0Id });
         }
 
@@ -31,11 +29,10 @@ namespace ShoppingCart.Infrastructure.Repositories
         {
             using var connection = _connectionFactory.CreateConnection();
             const string sql = """
-            INSERT INTO "Users" ("Auth0Id", "Email", "FirstName", "LastName", "CreatedAt", "UpdatedAt")
-            VALUES (@Auth0Id, @Email, @FirstName, @LastName, NOW(), NOW())
-            RETURNING "UserId", "Auth0Id", "Email", "FirstName", "LastName", "CreatedAt", "UpdatedAt"
-            """;
-
+                INSERT INTO "Users" ("Auth0Id", "Email", "FirstName", "LastName", "IsAdmin", "CreatedAt", "UpdatedAt")
+                VALUES (@Auth0Id, @Email, @FirstName, @LastName, @IsAdmin, NOW(), NOW())
+                RETURNING "UserId", "Auth0Id", "Email", "FirstName", "LastName", "IsActive", "IsAdmin", "CreatedAt", "UpdatedAt"
+                """;
             return await connection.QuerySingleAsync<User>(sql, user);
         }
 
@@ -43,11 +40,10 @@ namespace ShoppingCart.Infrastructure.Repositories
         {
             using var connection = _connectionFactory.CreateConnection();
             const string sql = """
-            UPDATE "Users"
-            SET "Email" = @Email, "FirstName" = @FirstName, "LastName" = @LastName, "UpdatedAt" = NOW()
-            WHERE "UserId" = @UserId
-            """;
-
+                UPDATE "Users"
+                SET "Email" = @Email, "FirstName" = @FirstName, "LastName" = @LastName, "IsAdmin" = @IsAdmin, "UpdatedAt" = NOW()
+                WHERE "UserId" = @UserId
+                """;
             await connection.ExecuteAsync(sql, user);
         }
 
@@ -106,6 +102,16 @@ namespace ShoppingCart.Infrastructure.Repositories
                 throw new InvalidOperationException(
                     "Can't delete this user — they have existing orders. Deactivate the account instead.");
             }
+        }
+
+        public async Task<IEnumerable<User>> GetAdminUsersAsync()
+        {
+            using var connection = _connectionFactory.CreateConnection();
+            const string sql = """
+        SELECT "UserId", "Auth0Id", "Email", "FirstName", "LastName", "IsActive", "IsAdmin", "CreatedAt", "UpdatedAt"
+        FROM "Users" WHERE "IsAdmin" = TRUE AND "IsActive" = TRUE
+        """;
+            return await connection.QueryAsync<User>(sql);
         }
     }
 }

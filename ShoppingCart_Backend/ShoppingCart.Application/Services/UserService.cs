@@ -16,6 +16,7 @@ namespace ShoppingCart.Application.Services
 
         public async Task<UserDto> GetOrCreateUserAsync(Auth0ProfileDto profile)
         {
+            var isAdmin = profile.Roles.Contains("Admin");
             var existing = await _userRepository.GetByAuth0IdAsync(profile.Auth0Id);
 
             if (existing is not null)
@@ -25,13 +26,15 @@ namespace ShoppingCart.Application.Services
 
                 var hasChanges = existing.Email != profile.Email
                     || existing.FirstName != profile.FirstName
-                    || existing.LastName != profile.LastName;
+                    || existing.LastName != profile.LastName
+                    || existing.IsAdmin != isAdmin; // keeps local admin flag in sync with Auth0's role assignment
 
                 if (hasChanges)
                 {
                     existing.Email = profile.Email;
                     existing.FirstName = profile.FirstName;
                     existing.LastName = profile.LastName;
+                    existing.IsAdmin = isAdmin;
                     await _userRepository.UpdateProfileAsync(existing);
                 }
 
@@ -43,7 +46,8 @@ namespace ShoppingCart.Application.Services
                 Auth0Id = profile.Auth0Id,
                 Email = profile.Email,
                 FirstName = profile.FirstName,
-                LastName = profile.LastName
+                LastName = profile.LastName,
+                IsAdmin = isAdmin
             };
 
             var created = await _userRepository.CreateAsync(newUser);

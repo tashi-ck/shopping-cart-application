@@ -16,5 +16,6 @@ namespace ShoppingCart.Application.Interfaces
         Task<IEnumerable<UserWithOrderCount>> GetAllForAdminAsync();
         Task<bool> SetActiveAsync(int userId, bool isActive);
         Task<bool> DeleteAsync(int userId);
+        Task<IEnumerable<User>> GetAdminUsersAsync();
     }
 }

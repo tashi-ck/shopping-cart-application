@@ -4,6 +4,7 @@ import { useAppUser } from "../context/AppUserContext";
 import { useCart } from "../context/CartContext";
 import { useIsAdmin } from "../hooks/useIsAdmin";
 import { Shield, ShoppingCart } from "lucide-react";
+import NotificationBell from "./NotificationBell";
 
 export default function Navbar() {
   const { isAuthenticated, loginWithRedirect, logout } = useAuth0();
@@ -45,25 +46,26 @@ export default function Navbar() {
       </div>
 
       <div className="flex items-center gap-4">
-        {isAuthenticated ? (
-          <>
-            <span className="text-sm text-gray-500 hidden sm:block">{appUser?.email}</span>
-            <button
-              onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}
-              className="text-sm font-medium text-gray-600 hover:text-gray-900 transition"
-            >
-              Log out
-            </button>
-          </>
-        ) : (
-          <button
-            onClick={() => loginWithRedirect()}
-            className="bg-indigo-600 text-white text-sm font-medium rounded-lg px-4 py-2 hover:bg-indigo-700 transition"
-          >
-            Log in
-          </button>
-        )}
-      </div>
+  {isAdmin && <NotificationBell />}
+  {isAuthenticated ? (
+    <>
+      <span className="text-sm text-gray-500 hidden sm:block">{appUser?.email}</span>
+      <button
+        onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}
+        className="text-sm font-medium text-gray-600 hover:text-gray-900 transition"
+      >
+        Log out
+      </button>
+    </>
+  ) : (
+    <button
+      onClick={() => loginWithRedirect()}
+      className="bg-indigo-600 text-white text-sm font-medium rounded-lg px-4 py-2 hover:bg-indigo-700 transition"
+    >
+      Log in
+    </button>
+  )}
+</div>
     </nav>
   );
 }

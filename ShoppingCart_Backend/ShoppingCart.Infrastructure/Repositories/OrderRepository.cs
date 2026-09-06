@@ -20,13 +20,14 @@ namespace ShoppingCart.Infrastructure.Repositories
         "ShippingAddress", "PaymentReference", "PaymentIntentId", "CreatedAt", "UpdatedAt"
         """;
 
-        public async Task<int> CreateOrderWithItemsAsync(
-            int userId, string shippingAddress, List<OrderItemInput> items,
-            string? paymentReference = null, string? paymentIntentId = null)
+        public async Task<(int OrderId, List<StockChangeInfo> StockChanges)> CreateOrderWithItemsAsync(
+    int userId, string shippingAddress, List<OrderItemInput> items,
+    string? paymentReference = null, string? paymentIntentId = null)
         {
             using var connection = _connectionFactory.CreateConnection();
             connection.Open();
             using var transaction = connection.BeginTransaction();
+            var stockChanges = new List<StockChangeInfo>();
 
             try
             {
@@ -35,33 +36,37 @@ namespace ShoppingCart.Infrastructure.Repositories
                 foreach (var item in items)
                 {
                     const string lockSql = """
-                    SELECT "StockQuantity" FROM "Products" WHERE "ProductId" = @ProductId FOR UPDATE
-                    """;
-                    var currentStock = await connection.QuerySingleOrDefaultAsync<int?>(
+                SELECT "StockQuantity", "Name" FROM "Products" WHERE "ProductId" = @ProductId FOR UPDATE
+                """;
+                    var product = await connection.QuerySingleOrDefaultAsync<(int StockQuantity, string Name)?>(
                         lockSql, new { item.ProductId }, transaction);
 
-                    if (currentStock is null)
+                    if (product is null)
                         throw new InvalidOperationException($"Product {item.ProductId} no longer exists.");
-                    if (currentStock < item.Quantity)
+
+                    if (product.Value.StockQuantity < item.Quantity)
                         throw new InvalidOperationException($"Not enough stock for product {item.ProductId}.");
 
+                    var newStock = product.Value.StockQuantity - item.Quantity;
+
                     const string decrementSql = """
-                    UPDATE "Products" SET "StockQuantity" = "StockQuantity" - @Quantity WHERE "ProductId" = @ProductId
-                    """;
+                UPDATE "Products" SET "StockQuantity" = "StockQuantity" - @Quantity WHERE "ProductId" = @ProductId
+                """;
                     await connection.ExecuteAsync(decrementSql, new { item.ProductId, item.Quantity }, transaction);
 
+                    stockChanges.Add(new StockChangeInfo(item.ProductId, product.Value.Name, product.Value.StockQuantity, newStock));
                     totalAmount += item.UnitPrice * item.Quantity;
                 }
 
                 const string insertOrderSql = """
-                INSERT INTO "Orders"
-                    ("UserId", "PaymentStatus", "FulfillmentStatus", "TotalAmount", "ShippingAddress",
-                     "PaymentReference", "PaymentIntentId", "CreatedAt", "UpdatedAt")
-                VALUES
-                    (@UserId, 'Paid', 'Confirmed', @TotalAmount, @ShippingAddress,
-                     @PaymentReference, @PaymentIntentId, NOW(), NOW())
-                RETURNING "OrderId"
-                """;
+            INSERT INTO "Orders"
+                ("UserId", "PaymentStatus", "FulfillmentStatus", "TotalAmount", "ShippingAddress",
+                 "PaymentReference", "PaymentIntentId", "CreatedAt", "UpdatedAt")
+            VALUES
+                (@UserId, 'Paid', 'Confirmed', @TotalAmount, @ShippingAddress,
+                 @PaymentReference, @PaymentIntentId, NOW(), NOW())
+            RETURNING "OrderId"
+            """;
                 var orderId = await connection.QuerySingleAsync<int>(insertOrderSql, new
                 {
                     UserId = userId,
@@ -72,9 +77,9 @@ namespace ShoppingCart.Infrastructure.Repositories
                 }, transaction);
 
                 const string insertItemSql = """
-                INSERT INTO "OrderItems" ("OrderId", "ProductId", "Quantity", "UnitPrice")
-                VALUES (@OrderId, @ProductId, @Quantity, @UnitPrice)
-                """;
+            INSERT INTO "OrderItems" ("OrderId", "ProductId", "Quantity", "UnitPrice")
+            VALUES (@OrderId, @ProductId, @Quantity, @UnitPrice)
+            """;
                 foreach (var item in items)
                 {
                     await connection.ExecuteAsync(insertItemSql, new
@@ -87,7 +92,7 @@ namespace ShoppingCart.Infrastructure.Repositories
                 }
 
                 transaction.Commit();
-                return orderId;
+                return (orderId, stockChanges);
             }
             catch
             {

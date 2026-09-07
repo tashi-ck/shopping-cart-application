@@ -113,5 +113,24 @@ namespace ShoppingCart.Infrastructure.Repositories
         """;
             return await connection.QueryAsync<User>(sql);
         }
+
+        public async Task<User> GetOrCreateGuestUserAsync(string email)
+        {
+            using var connection = _connectionFactory.CreateConnection();
+
+            const string selectSql = """
+        SELECT "UserId", "Auth0Id", "Email", "FirstName", "LastName", "IsActive", "IsAdmin", "IsGuest", "CreatedAt", "UpdatedAt"
+        FROM "Users" WHERE "Email" = @Email AND "IsGuest" = TRUE
+        """;
+            var existing = await connection.QuerySingleOrDefaultAsync<User>(selectSql, new { Email = email });
+            if (existing is not null) return existing;
+
+            const string insertSql = """
+        INSERT INTO "Users" ("Auth0Id", "Email", "IsGuest", "IsActive", "CreatedAt", "UpdatedAt")
+        VALUES (NULL, @Email, TRUE, TRUE, NOW(), NOW())
+        RETURNING "UserId", "Auth0Id", "Email", "FirstName", "LastName", "IsActive", "IsAdmin", "IsGuest", "CreatedAt", "UpdatedAt"
+        """;
+            return await connection.QuerySingleAsync<User>(insertSql, new { Email = email });
+        }
     }
 }

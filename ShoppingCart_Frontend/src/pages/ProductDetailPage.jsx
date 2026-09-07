@@ -43,23 +43,18 @@ export default function ProductDetailPage() {
   }, [id]);
 
   const handleAddToCart = async () => {
-    if (!isAuthenticated) {
-      loginWithRedirect({ appState: { returnTo: window.location.pathname } });
-      return;
-    }
+  setAddError("");
+  setAdding(true);
+  const result = await addItem(product, quantity); // now passes the full product, not just its id
+  setAdding(false);
 
-    setAddError("");
-    setAdding(true);
-    const result = await addItem(product.productId, quantity);
-    setAdding(false);
-
-    if (result.success) {
-      setAdded(true);
-      setTimeout(() => setAdded(false), 2000);
-    } else {
-      setAddError(result.message);
-    }
-  };
+  if (result.success) {
+    setAdded(true);
+    setTimeout(() => setAdded(false), 2000);
+  } else {
+    setAddError(result.message);
+  }
+};
 
   const handleBuyNowClick = () => {
   if (!isAuthenticated) {

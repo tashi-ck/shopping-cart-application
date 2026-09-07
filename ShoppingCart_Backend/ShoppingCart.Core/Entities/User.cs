@@ -9,7 +9,7 @@ namespace ShoppingCart.Core.Entities
     public class User
     {
         public int UserId { get; set; }
-        public string Auth0Id { get; set; } = string.Empty;
+        public string Auth0Id { get; set; } 
         public string Email { get; set; } = string.Empty;
         public string? FirstName { get; set; }
         public string? LastName { get; set; }
@@ -17,5 +17,7 @@ namespace ShoppingCart.Core.Entities
         public DateTime UpdatedAt { get; set; }
         public bool IsActive { get; set; } = true;
         public bool IsAdmin { get; set; }
+        public bool IsGuest { get; set; }
+
     }
 }

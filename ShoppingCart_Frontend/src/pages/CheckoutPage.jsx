@@ -125,7 +125,7 @@ export default function CheckoutPage() {
             />
           </div>
 
-          <Link to="/addresses" className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 w-fit">
+          <Link to="/profile" className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 w-fit">
             <Plus size={13} /> Manage saved addresses
           </Link>
 

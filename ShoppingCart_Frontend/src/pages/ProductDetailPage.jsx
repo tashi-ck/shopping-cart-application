@@ -5,6 +5,7 @@ import { ImageOff, ArrowLeft, Package, Minus, Plus, ShoppingCart, Check } from "
 import axiosClient from "../api/axiosClient";
 import { useCart } from "../context/CartContext";
 import { createBuyNowCheckoutSession } from "../api/paymentApi";
+import { getAddresses } from "../api/addressApi";
 
 export default function ProductDetailPage() {
   const { id } = useParams();
@@ -28,6 +29,9 @@ export default function ProductDetailPage() {
   const [buyNowAddress, setBuyNowAddress] = useState("");
   const [buyingNow, setBuyingNow] = useState(false);
   const [buyNowError, setBuyNowError] = useState("");
+
+  const [addresses, setAddresses] = useState([]);
+  const [selectedAddressId, setSelectedAddressId] = useState("");
 
   useEffect(() => {
     setLoading(true);
@@ -58,13 +62,27 @@ export default function ProductDetailPage() {
   };
 
   const handleBuyNowClick = () => {
-    if (!isAuthenticated) {
-      loginWithRedirect({ appState: { returnTo: window.location.pathname } });
-      return;
-    }
-    setBuyNowError("");
-    setShowBuyNowForm(true);
-  };
+  if (!isAuthenticated) {
+    loginWithRedirect({ appState: { returnTo: window.location.pathname } });
+    return;
+  }
+  setBuyNowError("");
+  setShowBuyNowForm(true);
+
+  // Only fetch once per page visit — skip if we already have them
+  if (addresses.length === 0) {
+    getAddresses()
+      .then((res) => {
+        setAddresses(res.data);
+        const defaultAddress = res.data.find((a) => a.isDefault);
+        if (defaultAddress) {
+          setSelectedAddressId(String(defaultAddress.addressId));
+          setBuyNowAddress(defaultAddress.fullAddress);
+        }
+      })
+      .catch(() => {}); // non-critical — Buy Now still works fine with a blank textarea if this fails
+  }
+};
 
   const handleBuyNowSubmit = async (e) => {
     e.preventDefault();
@@ -208,40 +226,69 @@ export default function ProductDetailPage() {
             )}
 
             {showBuyNowForm && (
-              <form onSubmit={handleBuyNowSubmit} className="mt-4 bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
-                <p className="text-sm font-medium text-gray-900">Shipping address</p>
-                {buyNowError && (
-                  <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                    {buyNowError}
-                  </div>
-                )}
-                <textarea
-                  value={buyNowAddress}
-                  onChange={(e) => setBuyNowAddress(e.target.value)}
-                  required
-                  rows={2}
-                  placeholder="Street address, city, postal code..."
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-                <div className="flex gap-2">
-                  <button
-                    type="submit"
-                    disabled={buyingNow}
-                    className="flex-1 bg-gray-900 text-white text-sm font-medium rounded-lg py-2 hover:bg-gray-800 disabled:opacity-50 transition"
-                  >
-                    {buyingNow ? "Placing order..." : `Confirm — $${(product.price * quantity).toFixed(2)}`}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowBuyNowForm(false)}
-                    disabled={buyingNow}
-                    className="text-sm font-medium text-gray-600 border border-gray-300 rounded-lg px-4 py-2 hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            )}
+  <form onSubmit={handleBuyNowSubmit} className="mt-4 bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
+    <p className="text-sm font-medium text-gray-900">Shipping address</p>
+    {buyNowError && (
+      <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+        {buyNowError}
+      </div>
+    )}
+
+    {addresses.length > 0 && (
+      <select
+        value={selectedAddressId}
+        onChange={(e) => {
+          const value = e.target.value;
+          setSelectedAddressId(value);
+          if (value === "") {
+            setBuyNowAddress("");
+          } else {
+            const address = addresses.find((a) => String(a.addressId) === value);
+            setBuyNowAddress(address?.fullAddress ?? "");
+          }
+        }}
+        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      >
+        {addresses.map((a) => (
+          <option key={a.addressId} value={a.addressId}>
+            {a.label} — {a.fullAddress.length > 40 ? a.fullAddress.slice(0, 40) + "..." : a.fullAddress}
+          </option>
+        ))}
+        <option value="">+ Type a new address</option>
+      </select>
+    )}
+
+    <textarea
+      value={buyNowAddress}
+      onChange={(e) => {
+        setBuyNowAddress(e.target.value);
+        setSelectedAddressId(""); // manual edit detaches from whichever saved address was selected
+      }}
+      required
+      rows={2}
+      placeholder="Street address, city, postal code..."
+      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+    />
+
+    <div className="flex gap-2">
+      <button
+        type="submit"
+        disabled={buyingNow}
+        className="flex-1 bg-gray-900 text-white text-sm font-medium rounded-lg py-2 hover:bg-gray-800 disabled:opacity-50 transition"
+      >
+        {buyingNow ? "Placing order..." : `Confirm — $${(product.price * quantity).toFixed(2)}`}
+      </button>
+      <button
+        type="button"
+        onClick={() => setShowBuyNowForm(false)}
+        disabled={buyingNow}
+        className="text-sm font-medium text-gray-600 border border-gray-300 rounded-lg px-4 py-2 hover:bg-gray-50"
+      >
+        Cancel
+      </button>
+    </div>
+  </form>
+)}
           </div>
         </div>
       </div>

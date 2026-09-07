@@ -20,8 +20,8 @@ namespace ShoppingCart.Application.DTOs
 
         public record OrderDto(
             int OrderId,
+            string PaymentStatus,
             string FulfillmentStatus,
-            string PaymentStatus,           
             decimal TotalAmount,
             string ShippingAddress,
             DateTime CreatedAt,
@@ -37,9 +37,9 @@ namespace ShoppingCart.Application.DTOs
             int UserId,
             string UserEmail,
             string? UserFirstName,
-            string? UserLastName,
+            string? UserLastName,        
+            string PaymentStatus,
             string FulfillmentStatus,
-            string PaymentStatus, 
             decimal TotalAmount,
             string ShippingAddress,
             DateTime CreatedAt
@@ -52,9 +52,9 @@ namespace ShoppingCart.Application.DTOs
             int UserId,
             string UserEmail,
             string? UserFirstName,
-            string? UserLastName,
+            string? UserLastName,           
+            string PaymentStatus,
             string FulfillmentStatus,
-            string PaymentStatus,  
             decimal TotalAmount,
             string ShippingAddress,
             string? PaymentReference,

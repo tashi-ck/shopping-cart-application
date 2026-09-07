@@ -37,7 +37,7 @@ export default function Navbar() {
         <span className="text-lg font-semibold text-gray-900">Novestra Shop</span>
         <div className="flex gap-2">
           <NavLink to="/" className={linkClass} end>Products</NavLink>
-          {isAuthenticated && (
+          
             <NavLink to="/cart" className={linkClass}>
               <span className="flex items-center gap-1.5">
                 <ShoppingCart size={14} />
@@ -49,7 +49,7 @@ export default function Navbar() {
                 )}
               </span>
             </NavLink>
-          )}
+          
           {isAuthenticated && <NavLink to="/orders" className={linkClass}>Orders</NavLink>}
           {isAdmin && (
             <NavLink to="/admin" className={linkClass}>

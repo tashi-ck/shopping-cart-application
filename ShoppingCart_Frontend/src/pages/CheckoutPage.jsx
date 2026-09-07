@@ -1,23 +1,30 @@
 import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { MapPin, ShoppingBag, Plus } from "lucide-react";
+import { useAuth0 } from "@auth0/auth0-react";
+import { MapPin, Mail, ShoppingBag, Plus } from "lucide-react";
 import { useCart } from "../context/CartContext";
-import { createCheckoutSession } from "../api/paymentApi";
+import { createCheckoutSession, createGuestCheckoutSession } from "../api/paymentApi";
 import { getAddresses } from "../api/addressApi";
 
 export default function CheckoutPage() {
+  const { isAuthenticated } = useAuth0();
   const { cart, isLoading, refreshCart } = useCart();
   const navigate = useNavigate();
 
   const [addresses, setAddresses] = useState([]);
   const [loadingAddresses, setLoadingAddresses] = useState(true);
-  const [selectedAddressId, setSelectedAddressId] = useState(""); // "" means "typing a new one"
+  const [selectedAddressId, setSelectedAddressId] = useState("");
   const [shippingAddress, setShippingAddress] = useState("");
+  const [guestEmail, setGuestEmail] = useState("");
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      setLoadingAddresses(false);
+      return;
+    }
     getAddresses()
       .then((res) => {
         setAddresses(res.data);
@@ -28,14 +35,13 @@ export default function CheckoutPage() {
         }
       })
       .finally(() => setLoadingAddresses(false));
-  }, []);
+  }, [isAuthenticated]);
 
   const handleSelectAddress = (e) => {
     const value = e.target.value;
     setSelectedAddressId(value);
-
     if (value === "") {
-      setShippingAddress(""); // switched to "type a new address" — start blank
+      setShippingAddress("");
     } else {
       const address = addresses.find((a) => String(a.addressId) === value);
       setShippingAddress(address?.fullAddress ?? "");
@@ -48,8 +54,14 @@ export default function CheckoutPage() {
     setSubmitting(true);
 
     try {
-      const res = await createCheckoutSession(shippingAddress);
-      window.location.href = res.data.url;
+      if (isAuthenticated) {
+        const res = await createCheckoutSession(shippingAddress);
+        window.location.href = res.data.url;
+      } else {
+        const items = cart.items.map((i) => ({ productId: i.productId, quantity: i.quantity }));
+        const res = await createGuestCheckoutSession(guestEmail, shippingAddress, items);
+        window.location.href = res.data.url;
+      }
     } catch (err) {
       setError(err.response?.data ?? "Couldn't start checkout. Please try again.");
       setSubmitting(false);
@@ -78,45 +90,57 @@ export default function CheckoutPage() {
 
       <div className="grid md:grid-cols-5 gap-6">
         <form onSubmit={handleSubmit} className="md:col-span-3 bg-white rounded-2xl border border-gray-200 p-6 space-y-4">
-          <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2 mb-2">
-            <MapPin size={15} /> Shipping address
-          </h2>
-
           {error && (
             <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
 
-          {!loadingAddresses && addresses.length > 0 && (
+          {!isAuthenticated && (
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Use a saved address</label>
-              <select
-                value={selectedAddressId}
-                onChange={handleSelectAddress}
+              <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2 mb-2">
+                <Mail size={15} /> Your email
+              </h2>
+              <input
+                type="email"
+                value={guestEmail}
+                onChange={(e) => setGuestEmail(e.target.value)}
+                required
+                placeholder="you@example.com"
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                {addresses.map((a) => (
-                  <option key={a.addressId} value={a.addressId}>
-                    {a.label} — {a.fullAddress.length > 50 ? a.fullAddress.slice(0, 50) + "..." : a.fullAddress}
-                  </option>
-                ))}
-                <option value="">+ Type a new address</option>
-              </select>
+              />
+              <p className="text-xs text-gray-400 mt-1">We'll send your order confirmation here.</p>
             </div>
           )}
 
           <div>
-            {addresses.length > 0 && (
-              <label className="block text-xs font-medium text-gray-500 mb-1">
-                {selectedAddressId ? "Address" : "New address"}
-              </label>
+            <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2 mb-2">
+              <MapPin size={15} /> Shipping address
+            </h2>
+
+            {isAuthenticated && !loadingAddresses && addresses.length > 0 && (
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Use a saved address</label>
+                <select
+                  value={selectedAddressId}
+                  onChange={handleSelectAddress}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  {addresses.map((a) => (
+                    <option key={a.addressId} value={a.addressId}>
+                      {a.label} — {a.fullAddress.length > 50 ? a.fullAddress.slice(0, 50) + "..." : a.fullAddress}
+                    </option>
+                  ))}
+                  <option value="">+ Type a new address</option>
+                </select>
+              </div>
             )}
+
             <textarea
               value={shippingAddress}
               onChange={(e) => {
                 setShippingAddress(e.target.value);
-                setSelectedAddressId(""); // editing the text manually detaches from the saved-address selection
+                setSelectedAddressId("");
               }}
               required
               rows={4}
@@ -125,9 +149,17 @@ export default function CheckoutPage() {
             />
           </div>
 
-          <Link to="/profile" className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 w-fit">
-            <Plus size={13} /> Manage saved addresses
-          </Link>
+          {isAuthenticated && (
+            <Link to="/profile" className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 w-fit">
+              <Plus size={13} /> Manage saved addresses
+            </Link>
+          )}
+
+          {!isAuthenticated && (
+            <p className="text-xs text-gray-400">
+              Have an account? <Link to="/login-prompt" className="text-indigo-600 hover:text-indigo-700">Log in</Link> to use saved addresses and track your order history.
+            </p>
+          )}
 
           <button
             type="submit"

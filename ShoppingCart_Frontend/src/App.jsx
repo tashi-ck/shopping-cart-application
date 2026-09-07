@@ -19,6 +19,7 @@ import AdminOrderDetailPage from "./pages/admin/AdminOrderDetailPage";
 import AdminUsersPage from "./pages/admin/AdminUsersPage";
 import AddressesPage from "./pages/AddressesPage";
 import ProfilePage from "./pages/ProfilePage";
+import GuestCheckoutSuccessPage from "./pages/GuestCheckoutSuccessPage";
 
 export default function App() {
   return (
@@ -27,13 +28,14 @@ export default function App() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<ProductsPage />} />
           <Route path="/products/:id" element={<ProductDetailPage />} />
-          <Route path="/cart" element={<ProtectedRoute><CartPage /></ProtectedRoute>} />
-          <Route path="/checkout" element={<ProtectedRoute><CheckoutPage /></ProtectedRoute>} />
+          <Route path="/cart" element={<CartPage />} />
+          <Route path="/checkout" element={<CheckoutPage />} />
           <Route path="/orders" element={<ProtectedRoute><OrdersPage /></ProtectedRoute>} />
           <Route path="/orders/:id" element={<ProtectedRoute><OrderDetailPage /></ProtectedRoute>} />
           <Route path="/checkout/success" element={<ProtectedRoute><CheckoutSuccessPage /></ProtectedRoute>} />
           <Route path="/addresses" element={<ProtectedRoute><AddressesPage /></ProtectedRoute>} />
           <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+          <Route path="/checkout/guest-success" element={<GuestCheckoutSuccessPage />} />
         </Route>
 
         <Route

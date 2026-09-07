@@ -58,16 +58,21 @@ namespace ShoppingCart.Infrastructure.Services
             var service = new Stripe.Checkout.SessionService();
             var session = await service.GetAsync(sessionId);
 
-            var userId = int.Parse(session.Metadata["userId"]);
-            var shippingAddress = session.Metadata["shippingAddress"];
+            var userId = int.Parse(session.Metadata.GetValueOrDefault("userId", "0"));
+            var shippingAddress = session.Metadata.GetValueOrDefault("shippingAddress", "");
             var mode = session.Metadata.GetValueOrDefault("mode", "cart");
 
             int? productId = session.Metadata.TryGetValue("productId", out var pid) ? int.Parse(pid) : null;
             int? quantity = session.Metadata.TryGetValue("quantity", out var qty) ? int.Parse(qty) : null;
 
+            string? guestEmail = session.Metadata.TryGetValue("guestEmail", out var ge) ? ge : null;
+            List<GuestCheckoutItem>? guestItems = session.Metadata.TryGetValue("items", out var itemsJson)
+                ? System.Text.Json.JsonSerializer.Deserialize<List<GuestCheckoutItem>>(itemsJson)
+                : null;
+
             return new PaymentSessionStatus(
                 session.PaymentStatus == "paid", userId, shippingAddress, mode, productId, quantity,
-                session.PaymentIntentId // already present on the Session object, no extra API call needed
+                session.PaymentIntentId, guestEmail, guestItems
             );
         }
 

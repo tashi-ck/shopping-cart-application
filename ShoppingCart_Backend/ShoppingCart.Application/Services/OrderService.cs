@@ -278,6 +278,7 @@ namespace ShoppingCart.Application.Services
             int orderId;
             bool wasNewlyCreated;
             List<StockChangeInfo> stockChanges;
+            int effectiveUserId; // the ID whoever actually owns this order — differs from status.UserId in guest mode
 
             try
             {
@@ -293,10 +294,34 @@ namespace ShoppingCart.Application.Services
                         throw new InvalidOperationException($"Not enough stock for {product.Name}.");
 
                     var orderItems = new List<OrderItemInput> { new(product.ProductId, status.Quantity.Value, product.Price) };
+                    effectiveUserId = status.UserId;
                     (orderId, wasNewlyCreated, stockChanges) = await CreateOrderWithRaceProtectionAsync(
-                        status.UserId, status.ShippingAddress, orderItems, sessionId, status.PaymentIntentId);
+                        effectiveUserId, status.ShippingAddress, orderItems, sessionId, status.PaymentIntentId);
                 }
-                else
+                else if (status.Mode == "guest")
+                {
+                    if (status.GuestEmail is null || status.GuestItems is null || status.GuestItems.Count == 0)
+                        throw new InvalidOperationException("Guest payment session is missing order details.");
+
+                    var guestUser = await _userRepository.GetOrCreateGuestUserAsync(status.GuestEmail);
+                    effectiveUserId = guestUser.UserId;
+
+                    var orderItems = new List<OrderItemInput>();
+                    foreach (var guestItem in status.GuestItems)
+                    {
+                        var product = await _productRepository.GetByIdAsync(guestItem.ProductId)
+                            ?? throw new InvalidOperationException($"Product {guestItem.ProductId} no longer exists.");
+
+                        if (product.StockQuantity < guestItem.Quantity)
+                            throw new InvalidOperationException($"Not enough stock for {product.Name}.");
+
+                        orderItems.Add(new OrderItemInput(product.ProductId, guestItem.Quantity, product.Price));
+                    }
+
+                    (orderId, wasNewlyCreated, stockChanges) = await CreateOrderWithRaceProtectionAsync(
+                        effectiveUserId, status.ShippingAddress, orderItems, sessionId, status.PaymentIntentId);
+                }
+                else // "cart"
                 {
                     var cart = await _cartRepository.GetByUserIdAsync(status.UserId)
                         ?? throw new InvalidOperationException("Cart not found.");
@@ -309,8 +334,9 @@ namespace ShoppingCart.Application.Services
                         .Select(ci => new OrderItemInput(ci.ProductId, ci.Quantity, ci.UnitPrice))
                         .ToList();
 
+                    effectiveUserId = status.UserId;
                     (orderId, wasNewlyCreated, stockChanges) = await CreateOrderWithRaceProtectionAsync(
-                        status.UserId, status.ShippingAddress, orderItems, sessionId, status.PaymentIntentId);
+                        effectiveUserId, status.ShippingAddress, orderItems, sessionId, status.PaymentIntentId);
                     await _cartItemRepository.DeleteAllForCartAsync(cart.CartId);
                 }
             }
@@ -320,12 +346,12 @@ namespace ShoppingCart.Application.Services
                 throw new InvalidOperationException($"{ex.Message} Your payment has been automatically refunded.");
             }
 
-            var orderDto = await GetOrderAsync(status.UserId, orderId)
+            var orderDto = await GetOrderAsync(effectiveUserId, orderId)
                 ?? throw new InvalidOperationException("Order created but could not be retrieved.");
 
             if (wasNewlyCreated)
             {
-                await TrySendConfirmationEmailAsync(status.UserId, orderDto);
+                await TrySendConfirmationEmailAsync(effectiveUserId, orderDto);
 
                 foreach (var change in stockChanges)
                 {

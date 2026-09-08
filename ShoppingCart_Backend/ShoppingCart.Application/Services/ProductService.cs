@@ -12,19 +12,36 @@ namespace ShoppingCart.Application.Services
     public class ProductService : IProductService
     {
         private readonly IProductRepository _productRepository;
+        private readonly IProductImageRepository _productImageRepository;
         private readonly ILowStockAlertService _lowStockAlertService;
-        public ProductService(IProductRepository productRepository) => _productRepository = productRepository;
+        public ProductService(
+            IProductRepository productRepository,
+            IProductImageRepository productImageRepository,
+            ILowStockAlertService lowStockAlertService)
+        {
+            _productRepository = productRepository;
+            _productImageRepository = productImageRepository;
+            _lowStockAlertService = lowStockAlertService;
+        }
 
         public async Task<IEnumerable<ProductDto>> GetAllProductsAsync(int? categoryId, string? search, string? sortBy, bool includeInactive = false)
         {
             var products = await _productRepository.GetAllAsync(categoryId, search, sortBy, includeInactive);
-            return products.Select(MapToDto);
+            // Gallery images intentionally NOT fetched here — the product grid only ever
+            // shows the single thumbnail (Products.ImageUrl); fetching every product's full
+            // gallery on every listing request would be a needless N+1 query pattern.
+            return products.Select(p => MapToDto(p, new List<ProductImageDto>()));
         }
 
         public async Task<ProductDto?> GetProductAsync(int productId)
         {
             var product = await _productRepository.GetByIdAsync(productId);
-            return product is null ? null : MapToDto(product);
+            if (product is null) return null;
+
+            var images = await _productImageRepository.GetAllForProductAsync(productId);
+            var imageDtos = images.Select(i => new ProductImageDto(i.ProductImageId, i.ImageUrl, i.DisplayOrder)).ToList();
+
+            return MapToDto(product, imageDtos);
         }
 
         public async Task<ProductDto> CreateProductAsync(CreateProductDto dto)
@@ -41,12 +58,10 @@ namespace ShoppingCart.Application.Services
 
             var created = await _productRepository.CreateAsync(product);
 
-            // CreateAsync's RETURNING clause doesn't include CategoryName (Products table has no such column),
-            // so re-fetch via GetByIdAsync to get the joined category name for the response DTO.
             var withCategory = await _productRepository.GetByIdAsync(created.ProductId)
                 ?? throw new InvalidOperationException("Failed to load newly created product.");
 
-            return MapToDto(withCategory);
+            return MapToDto(withCategory, new List<ProductImageDto>());
         }
 
         public async Task<bool> UpdateProductAsync(int productId, UpdateProductDto dto)
@@ -83,9 +98,30 @@ namespace ShoppingCart.Application.Services
         public Task<bool> SetProductActiveAsync(int productId, bool isActive) =>
             _productRepository.SetActiveAsync(productId, isActive);
 
-        private static ProductDto MapToDto(ProductWithCategory p) => new(
+        public async Task<ProductImageDto> AddProductImageAsync(int productId, AddProductImageDto dto)
+        {
+            var product = await _productRepository.GetByIdAsync(productId)
+                ?? throw new InvalidOperationException("Product not found.");
+
+            var image = await _productImageRepository.CreateAsync(new ProductImage
+            {
+                ProductId = productId,
+                ImageUrl = dto.ImageUrl
+            });
+
+            return new ProductImageDto(image.ProductImageId, image.ImageUrl, image.DisplayOrder);
+        }
+
+        public Task<bool> DeleteProductImageAsync(int productId, int productImageId) =>
+            _productImageRepository.DeleteAsync(productImageId, productId);
+
+        public Task ReorderProductImagesAsync(int productId, ReorderProductImagesDto dto) =>
+            _productImageRepository.ReorderAsync(productId, dto.ProductImageIds);
+
+        private static ProductDto MapToDto(ProductWithCategory p, List<ProductImageDto> images) => new(
             p.ProductId, p.CategoryId, p.CategoryName, p.Name, p.Description,
-            p.Price, p.StockQuantity, p.ImageUrl, p.IsActive, p.CreatedAt, p.UpdatedAt
+            p.Price, p.StockQuantity, p.ImageUrl, p.IsActive, p.CreatedAt, p.UpdatedAt,
+            images
         );
     }
 }

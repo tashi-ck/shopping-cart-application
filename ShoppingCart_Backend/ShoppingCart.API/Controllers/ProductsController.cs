@@ -65,5 +65,36 @@ namespace ShoppingCart.API.Controllers
             var updated = await _productService.SetProductActiveAsync(id, dto.IsActive);
             return updated ? NoContent() : NotFound();
         }
+
+        [HttpPost("{id}/images")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> AddProductImage(int id, [FromBody] AddProductImageDto dto)
+        {
+            try
+            {
+                var image = await _productService.AddProductImageAsync(id, dto);
+                return Ok(image);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(ex.Message);
+            }
+        }
+
+        [HttpDelete("{id}/images/{imageId}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> DeleteProductImage(int id, int imageId)
+        {
+            var deleted = await _productService.DeleteProductImageAsync(id, imageId);
+            return deleted ? NoContent() : NotFound();
+        }
+
+        [HttpPut("{id}/images/reorder")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> ReorderProductImages(int id, [FromBody] ReorderProductImagesDto dto)
+        {
+            await _productService.ReorderProductImagesAsync(id, dto);
+            return NoContent();
+        }
     }
 }

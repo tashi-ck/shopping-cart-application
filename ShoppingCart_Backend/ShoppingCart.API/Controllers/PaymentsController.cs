@@ -147,7 +147,7 @@ namespace ShoppingCart.API.Controllers
 
             var frontendUrl = _configuration["Frontend:BaseUrl"];
             var successUrl = $"{frontendUrl}/checkout/guest-success?session_id={{CHECKOUT_SESSION_ID}}";
-            var cancelUrl = $"{frontendUrl}/cart";
+            var cancelUrl = $"{frontendUrl}{dto.CancelPath ?? "/cart"}";
 
             var session = await _paymentService.CreateCheckoutSessionAsync(
                 userId: 0, // placeholder — never read, since mode is "guest"

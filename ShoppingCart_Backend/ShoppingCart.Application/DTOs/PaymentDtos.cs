@@ -12,6 +12,7 @@ namespace ShoppingCart.Application.DTOs
         public record CreateBuyNowCheckoutSessionDto(int ProductId, int Quantity, string ShippingAddress);
         public record CheckoutSessionResponseDto(string Url);
         public record GuestCheckoutItemDto(int ProductId, int Quantity);
-        public record CreateGuestCheckoutSessionDto(string Email, string ShippingAddress, List<GuestCheckoutItemDto> Items);
+        public record CreateGuestCheckoutSessionDto(string Email, string ShippingAddress, List<GuestCheckoutItemDto> Items, string? CancelPath = null);
+
     }
 }

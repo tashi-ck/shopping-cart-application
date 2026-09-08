@@ -9,8 +9,8 @@ export const createBuyNowCheckoutSession = (productId, quantity, shippingAddress
 export const confirmPayment = (sessionId) =>
   axiosClient.get(`/payments/confirm/${sessionId}`);
 
-export const createGuestCheckoutSession = (email, shippingAddress, items) =>
-  axiosClient.post("/payments/guest-checkout-session", { email, shippingAddress, items });
+export const createGuestCheckoutSession = (email, shippingAddress, items, cancelPath) =>
+  axiosClient.post("/payments/guest-checkout-session", { email, shippingAddress, items, cancelPath });
 
 export const guestConfirmPayment = (sessionId) =>
   axiosClient.get(`/payments/guest-confirm/${sessionId}`);

@@ -4,8 +4,8 @@ import { useAuth0 } from "@auth0/auth0-react";
 import { ImageOff, ArrowLeft, Package, Minus, Plus, ShoppingCart, Check } from "lucide-react";
 import axiosClient from "../api/axiosClient";
 import { useCart } from "../context/CartContext";
-import { getAddresses } from "../api/addressApi";
 import { createBuyNowCheckoutSession, createGuestCheckoutSession } from "../api/paymentApi";
+import { getAddresses } from "../api/addressApi";
 
 export default function ProductDetailPage() {
   const { id } = useParams();
@@ -18,6 +18,7 @@ export default function ProductDetailPage() {
   const [error, setError] = useState("");
 
   const [quantity, setQuantity] = useState(1);
+  const [selectedImageIndex, setSelectedImageIndex] = useState(0);
 
   // Add to Cart state
   const [adding, setAdding] = useState(false);
@@ -27,16 +28,18 @@ export default function ProductDetailPage() {
   // Buy Now state
   const [showBuyNowForm, setShowBuyNowForm] = useState(false);
   const [buyNowAddress, setBuyNowAddress] = useState("");
+  const [buyNowGuestEmail, setBuyNowGuestEmail] = useState("");
   const [buyingNow, setBuyingNow] = useState(false);
   const [buyNowError, setBuyNowError] = useState("");
-  const [buyNowGuestEmail, setBuyNowGuestEmail] = useState("");
 
+  // Saved addresses (logged-in users only)
   const [addresses, setAddresses] = useState([]);
   const [selectedAddressId, setSelectedAddressId] = useState("");
 
   useEffect(() => {
     setLoading(true);
     setError("");
+    setSelectedImageIndex(0);
     axiosClient.get(`/products/${id}`)
       .then((res) => setProduct(res.data))
       .catch(() => setError("Product not found."))
@@ -44,47 +47,71 @@ export default function ProductDetailPage() {
   }, [id]);
 
   const handleAddToCart = async () => {
-  setAddError("");
-  setAdding(true);
-  const result = await addItem(product, quantity); // now passes the full product, not just its id
-  setAdding(false);
+    setAddError("");
+    setAdding(true);
+    const result = await addItem(product, quantity);
+    setAdding(false);
 
-  if (result.success) {
-    setAdded(true);
-    setTimeout(() => setAdded(false), 2000);
-  } else {
-    setAddError(result.message);
-  }
-};
+    if (result.success) {
+      setAdded(true);
+      setTimeout(() => setAdded(false), 2000);
+    } else {
+      setAddError(result.message);
+    }
+  };
 
   const handleBuyNowClick = () => {
-  setBuyNowError("");
-  setShowBuyNowForm(true);
-};
+    setBuyNowError("");
+    setShowBuyNowForm(true);
+
+    if (isAuthenticated && addresses.length === 0) {
+      getAddresses()
+        .then((res) => {
+          setAddresses(res.data);
+          const defaultAddress = res.data.find((a) => a.isDefault);
+          if (defaultAddress) {
+            setSelectedAddressId(String(defaultAddress.addressId));
+            setBuyNowAddress(defaultAddress.fullAddress);
+          }
+        })
+        .catch(() => {});
+    }
+  };
+
+  const handleSelectBuyNowAddress = (e) => {
+    const value = e.target.value;
+    setSelectedAddressId(value);
+    if (value === "") {
+      setBuyNowAddress("");
+    } else {
+      const address = addresses.find((a) => String(a.addressId) === value);
+      setBuyNowAddress(address?.fullAddress ?? "");
+    }
+  };
 
   const handleBuyNowSubmit = async (e) => {
-  e.preventDefault();
-  setBuyNowError("");
-  setBuyingNow(true);
+    e.preventDefault();
+    setBuyNowError("");
+    setBuyingNow(true);
 
-  try {
-    if (isAuthenticated) {
-      const res = await createBuyNowCheckoutSession(product.productId, quantity, buyNowAddress);
-      window.location.href = res.data.url;
-    } else {
-      const res = await createGuestCheckoutSession(
-        buyNowGuestEmail,
-        buyNowAddress,
-        [{ productId: product.productId, quantity }],
-        `/products/${product.productId}` // cancel returns here, not to /cart
-      );
-      window.location.href = res.data.url;
+    try {
+      if (isAuthenticated) {
+        const res = await createBuyNowCheckoutSession(product.productId, quantity, buyNowAddress);
+        window.location.href = res.data.url;
+      } else {
+        const res = await createGuestCheckoutSession(
+          buyNowGuestEmail,
+          buyNowAddress,
+          [{ productId: product.productId, quantity }],
+          `/products/${product.productId}`
+        );
+        window.location.href = res.data.url;
+      }
+    } catch (err) {
+      setBuyNowError(err.response?.data ?? "Couldn't complete the purchase.");
+      setBuyingNow(false);
     }
-  } catch (err) {
-    setBuyNowError(err.response?.data ?? "Couldn't complete the purchase.");
-    setBuyingNow(false);
-  }
-};
+  };
 
   if (loading) {
     return (
@@ -114,6 +141,11 @@ export default function ProductDetailPage() {
 
   const outOfStock = product.stockQuantity === 0;
 
+  const allImages = [
+    ...(product.imageUrl ? [product.imageUrl] : []),
+    ...(product.images ?? []).map((img) => img.imageUrl).filter((url) => url !== product.imageUrl),
+  ];
+
   return (
     <div>
       <button
@@ -125,11 +157,34 @@ export default function ProductDetailPage() {
       </button>
 
       <div className="grid md:grid-cols-2 gap-10">
-        <div className="aspect-square bg-gray-50 rounded-2xl flex items-center justify-center overflow-hidden border border-gray-200">
-          {product.imageUrl ? (
-            <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover" />
-          ) : (
-            <ImageOff className="text-gray-300" size={48} />
+        <div>
+          <div className="aspect-square bg-gray-50 rounded-2xl flex items-center justify-center overflow-hidden border border-gray-200">
+            {allImages.length > 0 ? (
+              <img
+                src={allImages[selectedImageIndex]}
+                alt={product.name}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <ImageOff className="text-gray-300" size={48} />
+            )}
+          </div>
+
+          {allImages.length > 1 && (
+            <div className="flex gap-2 mt-3 overflow-x-auto">
+              {allImages.map((url, index) => (
+                <button
+                  key={url}
+                  type="button"
+                  onClick={() => setSelectedImageIndex(index)}
+                  className={`w-16 h-16 rounded-lg overflow-hidden border-2 shrink-0 transition ${
+                    index === selectedImageIndex ? "border-indigo-600" : "border-transparent hover:border-gray-300"
+                  }`}
+                >
+                  <img src={url} alt={`${product.name} ${index + 1}`} className="w-full h-full object-cover" />
+                </button>
+              ))}
+            </div>
           )}
         </div>
 
@@ -142,7 +197,7 @@ export default function ProductDetailPage() {
           </Link>
 
           <h1 className="text-2xl font-semibold text-gray-900 mb-3">{product.name}</h1>
-          <p className="text-2xl font-semibold text-gray-900 mb-5">${product.price.toFixed(2)}</p>
+          <p className="text-2xl font-semibold text-gray-900 mb-5">${Number(product.price).toFixed(2)}</p>
 
           {product.description && (
             <p className="text-sm text-gray-600 leading-relaxed mb-6">{product.description}</p>
@@ -215,61 +270,74 @@ export default function ProductDetailPage() {
             )}
 
             {showBuyNowForm && (
-  <form onSubmit={handleBuyNowSubmit} className="mt-4 bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
-    {!isAuthenticated && (
-      <div>
-        <p className="text-sm font-medium text-gray-900 mb-1">Your email</p>
-        <input
-          type="email"
-          value={buyNowGuestEmail}
-          onChange={(e) => setBuyNowGuestEmail(e.target.value)}
-          required
-          placeholder="you@example.com"
-          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        />
-      </div>
-    )}
+              <form onSubmit={handleBuyNowSubmit} className="mt-4 bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
+                {!isAuthenticated && (
+                  <div>
+                    <p className="text-sm font-medium text-gray-900 mb-1">Your email</p>
+                    <input
+                      type="email"
+                      value={buyNowGuestEmail}
+                      onChange={(e) => setBuyNowGuestEmail(e.target.value)}
+                      required
+                      placeholder="you@example.com"
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                )}
 
-    <p className="text-sm font-medium text-gray-900">Shipping address</p>
-    {buyNowError && (
-      <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-        {buyNowError}
-      </div>
-    )}
-    <textarea
-      value={buyNowAddress}
-      onChange={(e) => {
-        setBuyNowAddress(e.target.value);
-        setSelectedAddressId("");
-      }}
-      required
-      rows={2}
-      placeholder="Street address, city, postal code..."
-      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-    />
+                <p className="text-sm font-medium text-gray-900">Shipping address</p>
+                {buyNowError && (
+                  <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                    {buyNowError}
+                  </div>
+                )}
 
-    {/* ...existing saved-address <select> stays exactly as-is; it just won't render
-         for guests since `addresses` never gets populated when isAuthenticated is false... */}
+                {isAuthenticated && addresses.length > 0 && (
+                  <select
+                    value={selectedAddressId}
+                    onChange={handleSelectBuyNowAddress}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    {addresses.map((a) => (
+                      <option key={a.addressId} value={a.addressId}>
+                        {a.label} — {a.fullAddress.length > 40 ? a.fullAddress.slice(0, 40) + "..." : a.fullAddress}
+                      </option>
+                    ))}
+                    <option value="">+ Type a new address</option>
+                  </select>
+                )}
 
-    <div className="flex gap-2">
-      <button
-        type="submit"
-        disabled={buyingNow}
-        className="flex-1 bg-gray-900 text-white text-sm font-medium rounded-lg py-2 hover:bg-gray-800 disabled:opacity-50 transition"
-      >
-        {buyingNow ? "Placing order..." : `Confirm — $${(product.price * quantity).toFixed(2)}`}
-      </button>
-      <button
-        type="button"
-        onClick={() => setShowBuyNowForm(false)}
-        disabled={buyingNow}
-        className="text-sm font-medium text-gray-600 border border-gray-300 rounded-lg px-4 py-2 hover:bg-gray-50"
-      >
-        Cancel
-      </button>
-    </div>
-  </form>
-)}
+                <textarea
+                  value={buyNowAddress}
+                  onChange={(e) => {
+                    setBuyNowAddress(e.target.value);
+                    setSelectedAddressId("");
+                  }}
+                  required
+                  rows={2}
+                  placeholder="Street address, city, postal code..."
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    disabled={buyingNow}
+                    className="flex-1 bg-gray-900 text-white text-sm font-medium rounded-lg py-2 hover:bg-gray-800 disabled:opacity-50 transition"
+                  >
+                    {buyingNow ? "Placing order..." : `Confirm — $${(product.price * quantity).toFixed(2)}`}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowBuyNowForm(false)}
+                    disabled={buyingNow}
+                    className="text-sm font-medium text-gray-600 border border-gray-300 rounded-lg px-4 py-2 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       </div>

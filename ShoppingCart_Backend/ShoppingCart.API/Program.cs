@@ -56,6 +56,7 @@ builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<ILowStockAlertService, LowStockAlertService>();
 builder.Services.AddScoped<IAddressRepository, AddressRepository>();
 builder.Services.AddScoped<IAddressService, AddressService>();
+builder.Services.AddScoped<IProductImageRepository, ProductImageRepository>();
 
 // Add services to the container.
 

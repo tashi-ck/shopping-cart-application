@@ -14,3 +14,14 @@ export const updateProduct = (id, data) => axiosClient.put(`/products/${id}`, da
 export const deleteProduct = (id) => axiosClient.delete(`/products/${id}`);
 export const setProductActive = (id, isActive) =>
   axiosClient.patch(`/products/${id}/active`, { isActive });
+
+export const addProductImage = (productId, imageUrl) =>
+  axiosClient.post(`/products/${productId}/images`, { imageUrl });
+
+export const deleteProductImage = (productId, imageId) =>
+  axiosClient.delete(`/products/${productId}/images/${imageId}`);
+
+export const reorderProductImages = (productId, productImageIds) =>
+  axiosClient.put(`/products/${productId}/images/reorder`, { productImageIds });
+
+export const getProduct = (id) => axiosClient.get(`/products/${id}`);

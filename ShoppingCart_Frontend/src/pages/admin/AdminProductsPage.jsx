@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Pencil, Save, X, Trash2, Plus, EyeOff, Eye } from "lucide-react";
-import { getProducts, createProduct, updateProduct, deleteProduct, setProductActive } from "../../api/productApi";
+import { getProducts, getProduct, createProduct, updateProduct, deleteProduct, setProductActive } from "../../api/productApi";
 import { getCategories } from "../../api/categoryApi";
 import ImageUpload from "../../components/admin/ImageUpload";
+import ProductGalleryManager from "../../components/admin/ProductGalleryManager";
 
 const emptyForm = { categoryId: "", name: "", description: "", price: "", stockQuantity: "", imageUrl: "" };
 
@@ -17,20 +18,23 @@ export default function AdminProductsPage() {
 
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(emptyForm);
+  const [editingImages, setEditingImages] = useState([]);
+  const [loadingImages, setLoadingImages] = useState(false);
+
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const [deleteError, setDeleteError] = useState("");
   const [togglingId, setTogglingId] = useState(null);
 
- const load = () => {
-  setLoading(true);
-  Promise.all([getProducts({ includeInactive: true }), getCategories()])
-    .then(([productsRes, categoriesRes]) => {
-      setProducts(productsRes.data);
-      setCategories(categoriesRes.data);
-    })
-    .finally(() => setLoading(false));
+  const load = () => {
+    setLoading(true);
+    Promise.all([getProducts({ includeInactive: true }), getCategories()])
+      .then(([productsRes, categoriesRes]) => {
+        setProducts(productsRes.data);
+        setCategories(categoriesRes.data);
+      })
+      .finally(() => setLoading(false));
   };
-  
+
   useEffect(() => {
     load();
   }, []);
@@ -59,7 +63,7 @@ export default function AdminProductsPage() {
     }
   };
 
-  const startEdit = (p) => {
+  const startEdit = async (p) => {
     setEditingId(p.productId);
     setEditForm({
       categoryId: p.categoryId,
@@ -69,6 +73,16 @@ export default function AdminProductsPage() {
       stockQuantity: p.stockQuantity,
       imageUrl: p.imageUrl ?? "",
     });
+    setEditingImages([]);
+    setLoadingImages(true);
+    try {
+      const res = await getProduct(p.productId);
+      setEditingImages(res.data.images ?? []);
+    } catch {
+      setEditingImages([]);
+    } finally {
+      setLoadingImages(false);
+    }
   };
 
   const handleSaveEdit = async (productId) => {
@@ -91,7 +105,6 @@ export default function AdminProductsPage() {
       setProducts((prev) => prev.filter((p) => p.productId !== productId));
       setConfirmingDeleteId(null);
     } catch (err) {
-      // This is expected for any product that's part of an order — deactivate instead in that case.
       setDeleteError(
         err.response?.data ??
           "Couldn't delete this product — it's referenced by an existing order. Try deactivating it instead."
@@ -274,6 +287,19 @@ export default function AdminProductsPage() {
                           onChange={(url) => setEditForm({ ...editForm, imageUrl: url })}
                         />
                       </div>
+
+                      <div className="mb-3">
+                        {loadingImages ? (
+                          <p className="text-xs text-gray-400">Loading gallery...</p>
+                        ) : (
+                          <ProductGalleryManager
+                            productId={editingId}
+                            images={editingImages}
+                            onImagesChange={setEditingImages}
+                          />
+                        )}
+                      </div>
+
                       <div className="flex gap-2">
                         <button
                           onClick={() => handleSaveEdit(p.productId)}

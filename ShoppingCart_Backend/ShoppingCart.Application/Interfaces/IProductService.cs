@@ -15,5 +15,8 @@ namespace ShoppingCart.Application.Interfaces
         Task<bool> UpdateProductAsync(int productId, UpdateProductDto dto);
         Task<bool> DeleteProductAsync(int productId);
         Task<bool> SetProductActiveAsync(int productId, bool isActive);
+        Task<ProductImageDto> AddProductImageAsync(int productId, AddProductImageDto dto);
+        Task<bool> DeleteProductImageAsync(int productId, int productImageId);
+        Task ReorderProductImagesAsync(int productId, ReorderProductImagesDto dto);
     }
 }

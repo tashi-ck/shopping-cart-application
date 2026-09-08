@@ -19,7 +19,8 @@ namespace ShoppingCart.Application.DTOs
             string? ImageUrl,
             bool IsActive,
             DateTime CreatedAt,
-            DateTime UpdatedAt
+            DateTime UpdatedAt,
+             List<ProductImageDto> Images
         );
 
         public record CreateProductDto(
@@ -41,5 +42,11 @@ namespace ShoppingCart.Application.DTOs
         );
 
         public record SetProductActiveDto(bool IsActive);
+
+        public record ProductImageDto(int ProductImageId, string ImageUrl, int DisplayOrder);
+
+        public record AddProductImageDto(string ImageUrl);
+
+        public record ReorderProductImagesDto(List<int> ProductImageIds); // list order = new DisplayOrder
     }
 }

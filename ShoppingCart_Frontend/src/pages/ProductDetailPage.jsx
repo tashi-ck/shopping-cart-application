@@ -6,6 +6,7 @@ import axiosClient from "../api/axiosClient";
 import { useCart } from "../context/CartContext";
 import { createBuyNowCheckoutSession, createGuestCheckoutSession } from "../api/paymentApi";
 import { getAddresses } from "../api/addressApi";
+import ReviewsSection from "../components/ReviewsSection";
 
 export default function ProductDetailPage() {
   const { id } = useParams();
@@ -341,6 +342,7 @@ export default function ProductDetailPage() {
           </div>
         </div>
       </div>
+      <ReviewsSection productId={product.productId} />
     </div>
   );
 }

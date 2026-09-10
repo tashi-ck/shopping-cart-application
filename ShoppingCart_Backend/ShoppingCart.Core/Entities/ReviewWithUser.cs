@@ -10,5 +10,7 @@ namespace ShoppingCart.Core.Entities
     {
         public string? UserFirstName { get; set; }
         public string? UserLastName { get; set; }
+        public int HelpfulCount { get; set; }
+        public int NotHelpfulCount { get; set; }
     }
 }

@@ -17,14 +17,12 @@ namespace ShoppingCart.Infrastructure.Repositories
         public async Task<int?> GetQualifyingOrderIdAsync(int userId, int productId)
         {
             using var connection = _connectionFactory.CreateConnection();
-
-            // The earliest paid order containing this product — "paid" is the bar, not
-            // "delivered", matching most stores' actual verified-purchase standard.
             const string sql = """
             SELECT o."OrderId"
             FROM "Orders" o
             JOIN "OrderItems" oi ON oi."OrderId" = o."OrderId"
-            WHERE o."UserId" = @UserId AND oi."ProductId" = @ProductId AND o."PaymentStatus" = 'Paid'
+            WHERE o."UserId" = @UserId AND oi."ProductId" = @ProductId
+                  AND o."PaymentStatus" = 'Paid' AND o."FulfillmentStatus" = 'Delivered'
             ORDER BY o."CreatedAt" ASC
             LIMIT 1
             """;
@@ -35,19 +33,31 @@ namespace ShoppingCart.Infrastructure.Repositories
         {
             using var connection = _connectionFactory.CreateConnection();
             const string sql = """
-            SELECT "ReviewId", "ProductId", "UserId", "OrderId", "Rating", "Comment", "CreatedAt", "UpdatedAt"
+            SELECT "ReviewId", "ProductId", "UserId", "OrderId", "Rating", "Comment",
+                   "ModerationStatus", "RejectionReason", "CreatedAt", "UpdatedAt"
             FROM "Reviews" WHERE "UserId" = @UserId AND "ProductId" = @ProductId
             """;
             return await connection.QuerySingleOrDefaultAsync<Review>(sql, new { UserId = userId, ProductId = productId });
+        }
+
+        public async Task<Review?> GetByIdAsync(int reviewId)
+        {
+            using var connection = _connectionFactory.CreateConnection();
+            const string sql = """
+            SELECT "ReviewId", "ProductId", "UserId", "OrderId", "Rating", "Comment",
+                   "ModerationStatus", "RejectionReason", "CreatedAt", "UpdatedAt"
+            FROM "Reviews" WHERE "ReviewId" = @ReviewId
+            """;
+            return await connection.QuerySingleOrDefaultAsync<Review>(sql, new { ReviewId = reviewId });
         }
 
         public async Task<Review> CreateAsync(Review review)
         {
             using var connection = _connectionFactory.CreateConnection();
             const string sql = """
-            INSERT INTO "Reviews" ("ProductId", "UserId", "OrderId", "Rating", "Comment", "CreatedAt", "UpdatedAt")
-            VALUES (@ProductId, @UserId, @OrderId, @Rating, @Comment, NOW(), NOW())
-            RETURNING "ReviewId", "ProductId", "UserId", "OrderId", "Rating", "Comment", "CreatedAt", "UpdatedAt"
+            INSERT INTO "Reviews" ("ProductId", "UserId", "OrderId", "Rating", "Comment", "ModerationStatus", "CreatedAt", "UpdatedAt")
+            VALUES (@ProductId, @UserId, @OrderId, @Rating, @Comment, 'Pending', NOW(), NOW())
+            RETURNING "ReviewId", "ProductId", "UserId", "OrderId", "Rating", "Comment", "ModerationStatus", "RejectionReason", "CreatedAt", "UpdatedAt"
             """;
             return await connection.QuerySingleAsync<Review>(sql, review);
         }
@@ -55,8 +65,14 @@ namespace ShoppingCart.Infrastructure.Repositories
         public async Task<bool> UpdateAsync(Review review)
         {
             using var connection = _connectionFactory.CreateConnection();
+
+            // Editing a review resets it back to Pending — an approved review that gets
+            // edited shouldn't stay published with unreviewed content. Same principle as
+            // re-moderation on any content-changing edit.
             const string sql = """
-            UPDATE "Reviews" SET "Rating" = @Rating, "Comment" = @Comment, "UpdatedAt" = NOW()
+            UPDATE "Reviews"
+            SET "Rating" = @Rating, "Comment" = @Comment, "ModerationStatus" = 'Pending',
+                "RejectionReason" = NULL, "UpdatedAt" = NOW()
             WHERE "ReviewId" = @ReviewId AND "UserId" = @UserId
             """;
             var rowsAffected = await connection.ExecuteAsync(sql, review);
@@ -71,29 +87,103 @@ namespace ShoppingCart.Infrastructure.Repositories
             return rowsAffected > 0;
         }
 
-        public async Task<IEnumerable<ReviewWithUser>> GetForProductAsync(int productId)
+        public async Task<IEnumerable<ReviewWithUser>> GetForProductAsync(int productId, int? currentUserId)
         {
             using var connection = _connectionFactory.CreateConnection();
+
+            // Public rule: only Approved reviews show — EXCEPT the viewer's own review,
+            // regardless of its status, so an author can always see their pending/rejected
+            // submission rather than it silently disappearing.
             const string sql = """
-            SELECT r."ReviewId", r."ProductId", r."UserId", r."OrderId", r."Rating", r."Comment", r."CreatedAt", r."UpdatedAt",
-                   u."FirstName" AS "UserFirstName", u."LastName" AS "UserLastName"
+            SELECT r."ReviewId", r."ProductId", r."UserId", r."OrderId", r."Rating", r."Comment",
+                   r."ModerationStatus", r."RejectionReason", r."CreatedAt", r."UpdatedAt",
+                   u."FirstName" AS "UserFirstName", u."LastName" AS "UserLastName",
+                   COALESCE(SUM(CASE WHEN v."IsHelpful" = TRUE THEN 1 ELSE 0 END), 0) AS "HelpfulCount",
+                   COALESCE(SUM(CASE WHEN v."IsHelpful" = FALSE THEN 1 ELSE 0 END), 0) AS "NotHelpfulCount"
             FROM "Reviews" r
             JOIN "Users" u ON u."UserId" = r."UserId"
+            LEFT JOIN "ReviewHelpfulVotes" v ON v."ReviewId" = r."ReviewId"
             WHERE r."ProductId" = @ProductId
+                  AND (r."ModerationStatus" = 'Approved' OR r."UserId" = @CurrentUserId)
+            GROUP BY r."ReviewId", u."FirstName", u."LastName"
             ORDER BY r."CreatedAt" DESC
             """;
-            return await connection.QueryAsync<ReviewWithUser>(sql, new { ProductId = productId });
+            return await connection.QueryAsync<ReviewWithUser>(sql, new { ProductId = productId, CurrentUserId = currentUserId ?? -1 });
         }
 
-        public async Task<(double AverageRating, int ReviewCount)> GetSummaryAsync(int productId)
+        public async Task<(double AverageRating, int ReviewCount, Dictionary<int, int> Distribution)> GetSummaryAsync(int productId)
+        {
+            using var connection = _connectionFactory.CreateConnection();
+
+            const string statsSql = """
+            SELECT COALESCE(AVG("Rating"), 0) AS "AverageRating", COUNT(*) AS "ReviewCount"
+            FROM "Reviews" WHERE "ProductId" = @ProductId AND "ModerationStatus" = 'Approved'
+            """;
+            var stats = await connection.QuerySingleAsync<(double AverageRating, int ReviewCount)>(statsSql, new { ProductId = productId });
+
+            const string distributionSql = """
+            SELECT "Rating", COUNT(*) AS "Count"
+            FROM "Reviews" WHERE "ProductId" = @ProductId AND "ModerationStatus" = 'Approved'
+            GROUP BY "Rating"
+            """;
+            var rows = await connection.QueryAsync<(int Rating, int Count)>(distributionSql, new { ProductId = productId });
+
+            var distribution = Enumerable.Range(1, 5).ToDictionary(star => star, star => 0);
+            foreach (var row in rows) distribution[row.Rating] = row.Count;
+
+            return (stats.AverageRating, stats.ReviewCount, distribution);
+        }
+
+        public async Task UpsertHelpfulVoteAsync(int reviewId, int userId, bool isHelpful)
         {
             using var connection = _connectionFactory.CreateConnection();
             const string sql = """
-            SELECT COALESCE(AVG("Rating"), 0) AS "AverageRating", COUNT(*) AS "ReviewCount"
-            FROM "Reviews" WHERE "ProductId" = @ProductId
+            INSERT INTO "ReviewHelpfulVotes" ("ReviewId", "UserId", "IsHelpful", "CreatedAt")
+            VALUES (@ReviewId, @UserId, @IsHelpful, NOW())
+            ON CONFLICT ("ReviewId", "UserId") DO UPDATE SET "IsHelpful" = @IsHelpful
             """;
-            var result = await connection.QuerySingleAsync<(double AverageRating, int ReviewCount)>(sql, new { ProductId = productId });
-            return result;
+            await connection.ExecuteAsync(sql, new { ReviewId = reviewId, UserId = userId, IsHelpful = isHelpful });
+        }
+
+        public async Task RemoveHelpfulVoteAsync(int reviewId, int userId)
+        {
+            using var connection = _connectionFactory.CreateConnection();
+            const string sql = """DELETE FROM "ReviewHelpfulVotes" WHERE "ReviewId" = @ReviewId AND "UserId" = @UserId""";
+            await connection.ExecuteAsync(sql, new { ReviewId = reviewId, UserId = userId });
+        }
+
+        public async Task<bool?> GetUserVoteAsync(int reviewId, int userId)
+        {
+            using var connection = _connectionFactory.CreateConnection();
+            const string sql = """SELECT "IsHelpful" FROM "ReviewHelpfulVotes" WHERE "ReviewId" = @ReviewId AND "UserId" = @UserId""";
+            return await connection.QuerySingleOrDefaultAsync<bool?>(sql, new { ReviewId = reviewId, UserId = userId });
+        }
+
+        public async Task<IEnumerable<PendingReviewInfo>> GetPendingReviewsAsync()
+        {
+            using var connection = _connectionFactory.CreateConnection();
+            const string sql = """
+            SELECT r."ReviewId", r."ProductId", p."Name" AS "ProductName",
+                   u."FirstName" AS "UserFirstName", u."LastName" AS "UserLastName",
+                   r."Rating", r."Comment", r."CreatedAt"
+            FROM "Reviews" r
+            JOIN "Products" p ON p."ProductId" = r."ProductId"
+            JOIN "Users" u ON u."UserId" = r."UserId"
+            WHERE r."ModerationStatus" = 'Pending'
+            ORDER BY r."CreatedAt" ASC
+            """;
+            return await connection.QueryAsync<PendingReviewInfo>(sql);
+        }
+
+        public async Task<bool> ModerateAsync(int reviewId, string status, string? rejectionReason)
+        {
+            using var connection = _connectionFactory.CreateConnection();
+            const string sql = """
+            UPDATE "Reviews" SET "ModerationStatus" = @Status, "RejectionReason" = @RejectionReason, "UpdatedAt" = NOW()
+            WHERE "ReviewId" = @ReviewId
+            """;
+            var rowsAffected = await connection.ExecuteAsync(sql, new { ReviewId = reviewId, Status = status, RejectionReason = rejectionReason });
+            return rowsAffected > 0;
         }
     }
 }

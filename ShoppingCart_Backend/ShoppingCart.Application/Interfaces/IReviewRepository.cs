@@ -14,7 +14,12 @@ namespace ShoppingCart.Application.Interfaces
         Task<Review> CreateAsync(Review review);
         Task<bool> UpdateAsync(Review review);
         Task<bool> DeleteAsync(int reviewId, int userId);
-        Task<IEnumerable<ReviewWithUser>> GetForProductAsync(int productId);
-        Task<(double AverageRating, int ReviewCount)> GetSummaryAsync(int productId);
+        Task<IEnumerable<ReviewWithUser>> GetForProductAsync(int productId, int? currentUserId);
+        Task<(double AverageRating, int ReviewCount, Dictionary<int, int> Distribution)> GetSummaryAsync(int productId);
+        Task UpsertHelpfulVoteAsync(int reviewId, int userId, bool isHelpful);
+        Task RemoveHelpfulVoteAsync(int reviewId, int userId);
+        Task<bool?> GetUserVoteAsync(int reviewId, int userId);
+        Task<IEnumerable<PendingReviewInfo>> GetPendingReviewsAsync();
+        Task<bool> ModerateAsync(int reviewId, string status, string? rejectionReason);
     }
 }

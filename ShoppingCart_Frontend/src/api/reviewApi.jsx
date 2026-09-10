@@ -8,3 +8,7 @@ export const createReview = (productId, rating, comment) =>
 export const updateReview = (reviewId, rating, comment) =>
   axiosClient.put(`/reviews/${reviewId}`, { rating, comment });
 export const deleteReview = (reviewId) => axiosClient.delete(`/reviews/${reviewId}`);
+
+export const voteHelpful = (reviewId, isHelpful) =>
+  axiosClient.post(`/reviews/${reviewId}/helpful`, { isHelpful });
+export const removeVote = (reviewId) => axiosClient.delete(`/reviews/${reviewId}/helpful`);

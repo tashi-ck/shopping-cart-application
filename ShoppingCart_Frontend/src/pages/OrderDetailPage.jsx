@@ -4,6 +4,8 @@ import { CheckCircle2, ArrowLeft, MapPin, XCircle } from "lucide-react";
 import { getOrder, cancelOrder } from "../api/orderApi";
 import PaymentStatusBadge from "../components/PaymentStatusBadge";
 import { fulfillmentStatusStyles } from "../utils/statusStyles";
+import { getReviewableItems } from "../api/orderApi";
+import { Star, ShieldCheck } from "lucide-react";
 
 const statusStyles = {
   Pending: "bg-gray-100 text-gray-700",
@@ -26,6 +28,8 @@ export default function OrderDetailPage() {
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState("");
 
+  const [reviewableItems, setReviewableItems] = useState([]);
+
   useEffect(() => {
     setLoading(true);
     getOrder(id)
@@ -33,6 +37,14 @@ export default function OrderDetailPage() {
       .catch(() => setError("Order not found."))
       .finally(() => setLoading(false));
   }, [id]);
+
+  useEffect(() => {
+  if (order?.fulfillmentStatus === "Delivered") {
+    getReviewableItems(id)
+      .then((res) => setReviewableItems(res.data))
+      .catch(() => {});
+  }
+}, [order?.fulfillmentStatus, id]);
 
   const handleCancel = async () => {
     setCancelError("");
@@ -111,6 +123,34 @@ const canCancel = order.fulfillmentStatus === "Confirmed";
           <span>${order.totalAmount.toFixed(2)}</span>
         </div>
       </div>
+
+      {order.fulfillmentStatus === "Delivered" && reviewableItems.length > 0 && (
+  <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-4">
+    <h2 className="text-sm font-semibold text-gray-900 mb-4">Review your purchase</h2>
+    <div className="space-y-3">
+      {reviewableItems.map((item) => (
+        <div key={item.productId} className="flex items-center gap-4">
+          <div className="w-12 h-12 bg-gray-50 rounded-lg overflow-hidden shrink-0 border border-gray-200">
+            {item.imageUrl && <img src={item.imageUrl} alt={item.productName} className="w-full h-full object-cover" />}
+          </div>
+          <p className="flex-1 text-sm text-gray-900">{item.productName}</p>
+          {item.alreadyReviewed ? (
+            <span className="flex items-center gap-1 text-xs font-medium text-green-700">
+              <ShieldCheck size={13} /> Reviewed
+            </span>
+          ) : item.canReview ? (
+            <Link
+              to={`/products/${item.productId}#reviews`}
+              className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 border border-indigo-200 rounded-lg px-3 py-1.5"
+            >
+              <Star size={13} /> Write a review
+            </Link>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  </div>
+)}
 
       <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-4">
         <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2 mb-2">

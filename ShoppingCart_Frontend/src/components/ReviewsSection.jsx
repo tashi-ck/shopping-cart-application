@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useAuth0 } from "@auth0/auth0-react";
-import { MessageSquare, Pencil, Trash2 } from "lucide-react";
+import { MessageSquare, Pencil, Trash2, ShieldCheck, ThumbsUp, ThumbsDown } from "lucide-react";
 import StarRating from "./StarRating";
+import RatingDistribution from "./RatingDistribution";
 import {
   getReviews,
   getReviewSummary,
@@ -9,6 +10,8 @@ import {
   createReview,
   updateReview,
   deleteReview,
+  voteHelpful,
+  removeVote,
 } from "../api/reviewApi";
 
 function timeAgo(dateString) {
@@ -21,11 +24,103 @@ function timeAgo(dateString) {
   return new Date(dateString).toLocaleDateString(undefined, { year: "numeric", month: "long" });
 }
 
+function ReviewCard({ review, onEdit, onDelete, onVote, confirmingDelete, onConfirmDelete, onCancelDelete }) {
+  const handleVoteClick = async (isHelpful) => {
+    if (review.userVote === isHelpful) {
+      await removeVote(review.reviewId);
+    } else {
+      await voteHelpful(review.reviewId, isHelpful);
+    }
+    onVote();
+  };
+
+  return (
+    <div className="pb-5 border-b border-gray-50 last:border-0">
+      <div className="flex items-start justify-between">
+        <div>
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <span className="text-sm font-medium text-gray-900">{review.reviewerName}</span>
+            {review.isOwn && (
+              <span className="text-[10px] font-medium text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded-full">
+                Your review
+              </span>
+            )}
+            {review.isVerifiedPurchase && (
+              <span className="flex items-center gap-1 text-[10px] font-medium text-green-700 bg-green-50 px-1.5 py-0.5 rounded-full">
+                <ShieldCheck size={10} /> Verified Purchase
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <StarRating value={review.rating} readOnly size={13} />
+            <span className="text-xs text-gray-400">{timeAgo(review.createdAt)}</span>
+          </div>
+        </div>
+
+        {review.isOwn && (
+          <div className="flex gap-2 shrink-0">
+            <button onClick={onEdit} className="text-gray-400 hover:text-indigo-600">
+              <Pencil size={13} />
+            </button>
+            <button onClick={onDelete} className="text-gray-400 hover:text-red-600">
+              <Trash2 size={13} />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {review.comment && <p className="text-sm text-gray-600 mt-2">{review.comment}</p>}
+
+      {confirmingDelete ? (
+        <div className="flex items-center gap-2 mt-2">
+          <span className="text-xs text-gray-600">Delete this review?</span>
+          <button
+            onClick={onConfirmDelete}
+            className="text-xs font-medium bg-red-600 text-white rounded-lg px-2.5 py-1 hover:bg-red-700"
+          >
+            Yes
+          </button>
+          <button
+            onClick={onCancelDelete}
+            className="text-xs font-medium text-gray-600 border border-gray-300 rounded-lg px-2.5 py-1 hover:bg-gray-50"
+          >
+            No
+          </button>
+        </div>
+      ) : (
+        !review.isOwn && (
+          <div className="flex items-center gap-3 mt-3">
+            <span className="text-xs text-gray-400">Helpful?</span>
+            <button
+              type="button"
+              onClick={() => handleVoteClick(true)}
+              className={`flex items-center gap-1 text-xs transition ${
+                review.userVote === true ? "text-indigo-600 font-medium" : "text-gray-500 hover:text-gray-900"
+              }`}
+            >
+              <ThumbsUp size={13} /> {review.helpfulCount}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleVoteClick(false)}
+              className={`flex items-center gap-1 text-xs transition ${
+                review.userVote === false ? "text-indigo-600 font-medium" : "text-gray-500 hover:text-gray-900"
+              }`}
+            >
+              <ThumbsDown size={13} /> {review.notHelpfulCount}
+            </button>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
 export default function ReviewsSection({ productId }) {
   const { isAuthenticated, loginWithRedirect } = useAuth0();
 
   const [reviews, setReviews] = useState([]);
-  const [summary, setSummary] = useState({ averageRating: 0, reviewCount: 0 });
+  const [summary, setSummary] = useState({ averageRating: 0, reviewCount: 0, distribution: {} });
   const [eligibility, setEligibility] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -91,7 +186,7 @@ export default function ReviewsSection({ productId }) {
         await createReview(productId, formRating, formComment || null);
       }
       setShowForm(false);
-      await loadAll(); // re-fetch so the summary average and review list reflect the change
+      await loadAll();
     } catch (err) {
       setFormError(err.response?.data ?? "Couldn't save your review.");
     } finally {
@@ -110,24 +205,29 @@ export default function ReviewsSection({ productId }) {
   }
 
   return (
-    <div className="border-t border-gray-100 pt-8 mt-8">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-            <MessageSquare size={18} /> Reviews
-          </h2>
-          {summary.reviewCount > 0 ? (
-            <div className="flex items-center gap-2 mt-1">
-              <StarRating value={Math.round(summary.averageRating)} readOnly size={15} />
-              <span className="text-sm text-gray-600">
-                {summary.averageRating.toFixed(1)} ({summary.reviewCount} review{summary.reviewCount !== 1 ? "s" : ""})
-              </span>
-            </div>
-          ) : (
-            <p className="text-sm text-gray-400 mt-1">No reviews yet.</p>
-          )}
-        </div>
+    <div id="reviews" className="border-t border-gray-100 pt-8 mt-8">
+      <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2 mb-4">
+        <MessageSquare size={18} /> Reviews
+      </h2>
 
+      {summary.reviewCount > 0 ? (
+        <div className="grid sm:grid-cols-2 gap-6 mb-6">
+          <div>
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-semibold text-gray-900">{summary.averageRating.toFixed(1)}</span>
+              <StarRating value={Math.round(summary.averageRating)} readOnly size={16} />
+            </div>
+            <p className="text-sm text-gray-500 mt-1">
+              {summary.reviewCount} review{summary.reviewCount !== 1 ? "s" : ""}
+            </p>
+          </div>
+          <RatingDistribution distribution={summary.distribution} reviewCount={summary.reviewCount} />
+        </div>
+      ) : (
+        <p className="text-sm text-gray-400 mb-6">No reviews yet.</p>
+      )}
+
+      <div className="flex items-center gap-3 mb-6">
         {!showForm && isAuthenticated && eligibility?.canReview && (
           <button
             type="button"
@@ -208,55 +308,16 @@ export default function ReviewsSection({ productId }) {
 
       <div className="space-y-5">
         {reviews.map((r) => (
-          <div key={r.reviewId} className="pb-5 border-b border-gray-50 last:border-0">
-            <div className="flex items-start justify-between">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-sm font-medium text-gray-900">{r.reviewerName}</span>
-                  {r.isOwn && (
-                    <span className="text-[10px] font-medium text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded-full">
-                      Your review
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <StarRating value={r.rating} readOnly size={13} />
-                  <span className="text-xs text-gray-400">{timeAgo(r.createdAt)}</span>
-                </div>
-              </div>
-
-              {r.isOwn && (
-                <div className="flex gap-2 shrink-0">
-                  <button onClick={startEdit} className="text-gray-400 hover:text-indigo-600">
-                    <Pencil size={13} />
-                  </button>
-                  <button onClick={() => setConfirmingDeleteId(r.reviewId)} className="text-gray-400 hover:text-red-600">
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {r.comment && <p className="text-sm text-gray-600 mt-2">{r.comment}</p>}
-
-            {confirmingDeleteId === r.reviewId && (
-              <div className="flex items-center gap-2 mt-2">
-                <span className="text-xs text-gray-600">Delete this review?</span>
-                <button
-                  onClick={() => handleDelete(r.reviewId)}
-                  className="text-xs font-medium bg-red-600 text-white rounded-lg px-2.5 py-1 hover:bg-red-700"
-                >
-                  Yes
-                </button>
-                <button
-                  onClick={() => setConfirmingDeleteId(null)}
-                  className="text-xs font-medium text-gray-600 border border-gray-300 rounded-lg px-2.5 py-1 hover:bg-gray-50"
-                >
-                  No
-                </button>
-              </div>
-            )}
-          </div>
+          <ReviewCard
+            key={r.reviewId}
+            review={r}
+            onEdit={startEdit}
+            onDelete={() => setConfirmingDeleteId(r.reviewId)}
+            onVote={loadAll}
+            confirmingDelete={confirmingDeleteId === r.reviewId}
+            onConfirmDelete={() => handleDelete(r.reviewId)}
+            onCancelDelete={() => setConfirmingDeleteId(null)}
+          />
         ))}
       </div>
     </div>

@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useAuth0 } from "@auth0/auth0-react";
-import { ImageOff, ArrowLeft, Package, Minus, Plus, ShoppingCart, Check } from "lucide-react";
+import {
+  ImageOff, ArrowLeft, ChevronLeft, ChevronRight, Package, Minus, Plus, ShoppingCart, Check,
+} from "lucide-react";
 import axiosClient from "../api/axiosClient";
 import { useCart } from "../context/CartContext";
 import { createBuyNowCheckoutSession, createGuestCheckoutSession } from "../api/paymentApi";
@@ -19,7 +21,11 @@ export default function ProductDetailPage() {
   const [error, setError] = useState("");
 
   const [quantity, setQuantity] = useState(1);
+
+  // Gallery state
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
+  const [isZooming, setIsZooming] = useState(false);
+  const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 50 });
 
   // Add to Cart state
   const [adding, setAdding] = useState(false);
@@ -147,6 +153,21 @@ export default function ProductDetailPage() {
     ...(product.images ?? []).map((img) => img.imageUrl).filter((url) => url !== product.imageUrl),
   ];
 
+  const goToPrevImage = () => {
+    setSelectedImageIndex((prev) => (prev === 0 ? allImages.length - 1 : prev - 1));
+  };
+
+  const goToNextImage = () => {
+    setSelectedImageIndex((prev) => (prev === allImages.length - 1 ? 0 : prev + 1));
+  };
+
+  const handleMouseMove = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    setZoomOrigin({ x, y });
+  };
+
   return (
     <div>
       <button
@@ -159,15 +180,51 @@ export default function ProductDetailPage() {
 
       <div className="grid md:grid-cols-2 gap-10">
         <div>
-          <div className="aspect-square bg-gray-50 rounded-2xl flex items-center justify-center overflow-hidden border border-gray-200">
+          <div
+            className="relative aspect-square bg-gray-50 rounded-2xl overflow-hidden border border-gray-200 group"
+            onMouseEnter={() => setIsZooming(true)}
+            onMouseLeave={() => setIsZooming(false)}
+            onMouseMove={handleMouseMove}
+          >
             {allImages.length > 0 ? (
               <img
                 src={allImages[selectedImageIndex]}
                 alt={product.name}
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover transition-transform duration-200 ease-out cursor-zoom-in"
+                style={{
+                  transform: isZooming ? "scale(2)" : "scale(1)",
+                  transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
+                }}
               />
             ) : (
-              <ImageOff className="text-gray-300" size={48} />
+              <div className="w-full h-full flex items-center justify-center">
+                <ImageOff className="text-gray-300" size={48} />
+              </div>
+            )}
+
+            {allImages.length > 1 && (
+              <>
+                <button
+                  type="button"
+                  onClick={goToPrevImage}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 bg-white/90 hover:bg-white text-gray-700 rounded-full p-2 shadow-md opacity-0 group-hover:opacity-100 transition"
+                  aria-label="Previous image"
+                >
+                  <ChevronLeft size={18} />
+                </button>
+                <button
+                  type="button"
+                  onClick={goToNextImage}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 bg-white/90 hover:bg-white text-gray-700 rounded-full p-2 shadow-md opacity-0 group-hover:opacity-100 transition"
+                  aria-label="Next image"
+                >
+                  <ChevronRight size={18} />
+                </button>
+
+                <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-black/50 text-white text-xs font-medium px-2.5 py-1 rounded-full opacity-0 group-hover:opacity-100 transition">
+                  {selectedImageIndex + 1} / {allImages.length}
+                </div>
+              </>
             )}
           </div>
 
@@ -342,6 +399,7 @@ export default function ProductDetailPage() {
           </div>
         </div>
       </div>
+
       <ReviewsSection productId={product.productId} />
     </div>
   );

@@ -12,3 +12,10 @@ export const deleteReview = (reviewId) => axiosClient.delete(`/reviews/${reviewI
 export const voteHelpful = (reviewId, isHelpful) =>
   axiosClient.post(`/reviews/${reviewId}/helpful`, { isHelpful });
 export const removeVote = (reviewId) => axiosClient.delete(`/reviews/${reviewId}/helpful`);
+
+export const getPendingReviews = () => axiosClient.get("/reviews/admin/pending");
+export const moderateReview = (reviewId, approve, rejectionReason) =>
+  axiosClient.put(`/reviews/admin/${reviewId}/moderate`, { approve, rejectionReason });
+
+export const getProcessedReviews = () => axiosClient.get("/reviews/admin/processed");
+export const getReviewDetailForAdmin = (reviewId) => axiosClient.get(`/reviews/admin/${reviewId}`);

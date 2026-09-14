@@ -21,5 +21,7 @@ namespace ShoppingCart.Application.Interfaces
         Task<bool?> GetUserVoteAsync(int reviewId, int userId);
         Task<IEnumerable<PendingReviewInfo>> GetPendingReviewsAsync();
         Task<bool> ModerateAsync(int reviewId, string status, string? rejectionReason);
+        Task<IEnumerable<PendingReviewInfo>> GetProcessedReviewsAsync(); // Approved + Rejected, newest first
+        Task<ReviewWithUser?> GetByIdWithUserAsync(int reviewId);
     }
 }

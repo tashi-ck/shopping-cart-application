@@ -13,12 +13,15 @@ namespace ShoppingCart.Application.Services
     {
         private readonly IReviewRepository _reviewRepository;
         private readonly IOrderRepository _orderRepository;
+        private readonly IProductRepository _productRepository;
 
-        public ReviewService(IReviewRepository reviewRepository, IOrderRepository orderRepository)
+        public ReviewService(IReviewRepository reviewRepository, IOrderRepository orderRepository, IProductRepository productRepository)
         {
             _reviewRepository = reviewRepository;
             _orderRepository = orderRepository;
+            _productRepository = productRepository;
         }
+
 
         public async Task<IEnumerable<ReviewDto>> GetReviewsForProductAsync(int productId, int? currentUserId)
         {
@@ -127,13 +130,13 @@ namespace ShoppingCart.Application.Services
             return result;
         }
 
-        public async Task<IEnumerable<PendingReviewDto>> GetPendingReviewsAsync()
+        public async Task<IEnumerable<AdminReviewListItemDto>> GetPendingReviewsAsync()
         {
             var pending = await _reviewRepository.GetPendingReviewsAsync();
-            return pending.Select(p => new PendingReviewDto(
-                p.ReviewId, p.ProductId, p.ProductName,
+            return pending.Select(p => new AdminReviewListItemDto(
+                p.ReviewId, p.ProductId, p.ProductName, 
                 string.IsNullOrWhiteSpace(p.UserFirstName) ? "Anonymous" : $"{p.UserFirstName} {p.UserLastName}",
-                p.Rating, p.Comment, p.CreatedAt
+                p.Rating, p.Comment, p.ModerationStatus, p.CreatedAt
             ));
         }
 
@@ -159,6 +162,35 @@ namespace ShoppingCart.Application.Services
                 IsOwn: r.UserId == currentUserId, IsVerifiedPurchase: true,
                 r.HelpfulCount, r.NotHelpfulCount, userVote,
                 r.ModerationStatus, r.RejectionReason
+            );
+        }
+
+        public async Task<IEnumerable<AdminReviewListItemDto>> GetProcessedReviewsAsync()
+        {
+            var reviews = await _reviewRepository.GetProcessedReviewsAsync();
+            return reviews.Select(r => new AdminReviewListItemDto(
+                r.ReviewId, r.ProductId, r.ProductName,
+                string.IsNullOrWhiteSpace(r.UserFirstName) ? "Anonymous" : $"{r.UserFirstName} {r.UserLastName}",
+                r.Rating, r.Comment, r.ModerationStatus, r.CreatedAt
+            ));
+        }
+
+        public async Task<AdminReviewDetailDto?> GetReviewDetailForAdminAsync(int reviewId)
+        {
+            var review = await _reviewRepository.GetByIdWithUserAsync(reviewId);
+            if (review is null) return null;
+
+            var product = await _productRepository.GetByIdAsync(review.ProductId);
+
+            return new AdminReviewDetailDto(
+                review.ReviewId, review.ProductId, product?.Name ?? "Unknown product",
+                review.UserId,
+                string.IsNullOrWhiteSpace(review.UserFirstName) ? "Anonymous" : $"{review.UserFirstName} {review.UserLastName}",
+                review.UserEmail,
+                review.OrderId, review.Rating, review.Comment,
+                review.ModerationStatus, review.RejectionReason,
+                review.HelpfulCount, review.NotHelpfulCount,
+                review.CreatedAt, review.UpdatedAt
             );
         }
     }

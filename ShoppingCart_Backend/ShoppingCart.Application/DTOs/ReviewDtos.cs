@@ -43,5 +43,19 @@ namespace ShoppingCart.Application.DTOs
         );
 
         public record ModerateReviewDto(bool Approve, string? RejectionReason);
+
+        public record AdminReviewListItemDto(
+            int ReviewId, int ProductId, string ProductName, string ReviewerName,
+            int Rating, string? Comment, string ModerationStatus, DateTime CreatedAt
+        );
+
+        public record AdminReviewDetailDto(
+            int ReviewId, int ProductId, string ProductName,
+            int UserId, string ReviewerName, string ReviewerEmail,
+            int OrderId, int Rating, string? Comment,
+            string ModerationStatus, string? RejectionReason,
+            int HelpfulCount, int NotHelpfulCount,
+            DateTime CreatedAt, DateTime UpdatedAt
+        );
     }
 }

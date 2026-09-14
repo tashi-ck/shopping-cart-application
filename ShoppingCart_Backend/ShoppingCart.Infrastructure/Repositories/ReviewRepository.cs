@@ -97,7 +97,7 @@ namespace ShoppingCart.Infrastructure.Repositories
             const string sql = """
             SELECT r."ReviewId", r."ProductId", r."UserId", r."OrderId", r."Rating", r."Comment",
                    r."ModerationStatus", r."RejectionReason", r."CreatedAt", r."UpdatedAt",
-                   u."FirstName" AS "UserFirstName", u."LastName" AS "UserLastName",
+                   u."FirstName" AS "UserFirstName", u."LastName" AS "UserLastName", u."Email" AS "UserEmail",
                    COALESCE(SUM(CASE WHEN v."IsHelpful" = TRUE THEN 1 ELSE 0 END), 0) AS "HelpfulCount",
                    COALESCE(SUM(CASE WHEN v."IsHelpful" = FALSE THEN 1 ELSE 0 END), 0) AS "NotHelpfulCount"
             FROM "Reviews" r
@@ -105,7 +105,7 @@ namespace ShoppingCart.Infrastructure.Repositories
             LEFT JOIN "ReviewHelpfulVotes" v ON v."ReviewId" = r."ReviewId"
             WHERE r."ProductId" = @ProductId
                   AND (r."ModerationStatus" = 'Approved' OR r."UserId" = @CurrentUserId)
-            GROUP BY r."ReviewId", u."FirstName", u."LastName"
+            GROUP BY r."ReviewId", u."FirstName", u."LastName", u."Email"
             ORDER BY r."CreatedAt" DESC
             """;
             return await connection.QueryAsync<ReviewWithUser>(sql, new { ProductId = productId, CurrentUserId = currentUserId ?? -1 });
@@ -163,15 +163,15 @@ namespace ShoppingCart.Infrastructure.Repositories
         {
             using var connection = _connectionFactory.CreateConnection();
             const string sql = """
-            SELECT r."ReviewId", r."ProductId", p."Name" AS "ProductName",
-                   u."FirstName" AS "UserFirstName", u."LastName" AS "UserLastName",
-                   r."Rating", r."Comment", r."CreatedAt"
-            FROM "Reviews" r
-            JOIN "Products" p ON p."ProductId" = r."ProductId"
-            JOIN "Users" u ON u."UserId" = r."UserId"
-            WHERE r."ModerationStatus" = 'Pending'
-            ORDER BY r."CreatedAt" ASC
-            """;
+        SELECT r."ReviewId", r."ProductId", p."Name" AS "ProductName",
+               u."FirstName" AS "UserFirstName", u."LastName" AS "UserLastName",
+               r."Rating", r."Comment", r."ModerationStatus", r."CreatedAt"
+        FROM "Reviews" r
+        JOIN "Products" p ON p."ProductId" = r."ProductId"
+        JOIN "Users" u ON u."UserId" = r."UserId"
+        WHERE r."ModerationStatus" = 'Pending'
+        ORDER BY r."CreatedAt" ASC
+        """;
             return await connection.QueryAsync<PendingReviewInfo>(sql);
         }
 
@@ -184,6 +184,40 @@ namespace ShoppingCart.Infrastructure.Repositories
             """;
             var rowsAffected = await connection.ExecuteAsync(sql, new { ReviewId = reviewId, Status = status, RejectionReason = rejectionReason });
             return rowsAffected > 0;
+        }
+
+        public async Task<IEnumerable<PendingReviewInfo>> GetProcessedReviewsAsync()
+        {
+            using var connection = _connectionFactory.CreateConnection();
+            const string sql = """
+        SELECT r."ReviewId", r."ProductId", p."Name" AS "ProductName",
+               u."FirstName" AS "UserFirstName", u."LastName" AS "UserLastName",
+               r."Rating", r."Comment", r."ModerationStatus", r."CreatedAt"
+        FROM "Reviews" r
+        JOIN "Products" p ON p."ProductId" = r."ProductId"
+        JOIN "Users" u ON u."UserId" = r."UserId"
+        WHERE r."ModerationStatus" IN ('Approved', 'Rejected')
+        ORDER BY r."UpdatedAt" DESC
+        """;
+            return await connection.QueryAsync<PendingReviewInfo>(sql);
+        }
+
+        public async Task<ReviewWithUser?> GetByIdWithUserAsync(int reviewId)
+        {
+            using var connection = _connectionFactory.CreateConnection();
+            const string sql = """
+        SELECT r."ReviewId", r."ProductId", r."UserId", r."OrderId", r."Rating", r."Comment",
+               r."ModerationStatus", r."RejectionReason", r."CreatedAt", r."UpdatedAt",
+               u."FirstName" AS "UserFirstName", u."LastName" AS "UserLastName", u."Email" AS "UserEmail",
+               COALESCE(SUM(CASE WHEN v."IsHelpful" = TRUE THEN 1 ELSE 0 END), 0) AS "HelpfulCount",
+               COALESCE(SUM(CASE WHEN v."IsHelpful" = FALSE THEN 1 ELSE 0 END), 0) AS "NotHelpfulCount"
+        FROM "Reviews" r
+        JOIN "Users" u ON u."UserId" = r."UserId"
+        LEFT JOIN "ReviewHelpfulVotes" v ON v."ReviewId" = r."ReviewId"
+        WHERE r."ReviewId" = @ReviewId
+        GROUP BY r."ReviewId", u."FirstName", u."LastName", u."Email"
+        """;
+            return await connection.QuerySingleOrDefaultAsync<ReviewWithUser>(sql, new { ReviewId = reviewId });
         }
     }
 }

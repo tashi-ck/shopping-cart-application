@@ -18,7 +18,9 @@ namespace ShoppingCart.Application.Interfaces
         Task VoteHelpfulAsync(int userId, int reviewId, bool isHelpful);
         Task RemoveVoteAsync(int userId, int reviewId);
         Task<IEnumerable<ReviewableOrderItemDto>> GetReviewableItemsForOrderAsync(int userId, int orderId);
-        Task<IEnumerable<PendingReviewDto>> GetPendingReviewsAsync();
+        Task<IEnumerable<AdminReviewListItemDto>> GetPendingReviewsAsync();
         Task<bool> ModerateReviewAsync(int reviewId, ModerateReviewDto dto);
+        Task<IEnumerable<AdminReviewListItemDto>> GetProcessedReviewsAsync();
+        Task<AdminReviewDetailDto?> GetReviewDetailForAdminAsync(int reviewId);
     }
 }

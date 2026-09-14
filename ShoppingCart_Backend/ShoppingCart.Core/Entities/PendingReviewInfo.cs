@@ -15,6 +15,7 @@ namespace ShoppingCart.Core.Entities
         public string? UserLastName { get; set; }
         public int Rating { get; set; }
         public string? Comment { get; set; }
+        public string ModerationStatus { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
     }
 }

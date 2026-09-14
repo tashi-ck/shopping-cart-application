@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuth0 } from "@auth0/auth0-react";
-import { MessageSquare, Pencil, Trash2, ShieldCheck, ThumbsUp, ThumbsDown } from "lucide-react";
+import { MessageSquare, Pencil, Trash2, ShieldCheck, ThumbsUp, ThumbsDown, Clock, XCircle } from "lucide-react";
 import StarRating from "./StarRating";
 import RatingDistribution from "./RatingDistribution";
 import {
@@ -34,6 +34,8 @@ function ReviewCard({ review, onEdit, onDelete, onVote, confirmingDelete, onConf
     onVote();
   };
 
+  const isPublic = review.moderationStatus === "Approved";
+
   return (
     <div className="pb-5 border-b border-gray-50 last:border-0">
       <div className="flex items-start justify-between">
@@ -48,6 +50,16 @@ function ReviewCard({ review, onEdit, onDelete, onVote, confirmingDelete, onConf
             {review.isVerifiedPurchase && (
               <span className="flex items-center gap-1 text-[10px] font-medium text-green-700 bg-green-50 px-1.5 py-0.5 rounded-full">
                 <ShieldCheck size={10} /> Verified Purchase
+              </span>
+            )}
+            {review.isOwn && review.moderationStatus === "Pending" && (
+              <span className="flex items-center gap-1 text-[10px] font-medium text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-full">
+                <Clock size={10} /> Awaiting approval
+              </span>
+            )}
+            {review.isOwn && review.moderationStatus === "Rejected" && (
+              <span className="flex items-center gap-1 text-[10px] font-medium text-red-700 bg-red-50 px-1.5 py-0.5 rounded-full">
+                <XCircle size={10} /> Not approved
               </span>
             )}
           </div>
@@ -71,6 +83,18 @@ function ReviewCard({ review, onEdit, onDelete, onVote, confirmingDelete, onConf
 
       {review.comment && <p className="text-sm text-gray-600 mt-2">{review.comment}</p>}
 
+      {review.isOwn && review.moderationStatus === "Rejected" && review.rejectionReason && (
+        <p className="text-xs text-red-600 mt-2 bg-red-50 border border-red-100 rounded-lg px-2.5 py-1.5">
+          Reason: {review.rejectionReason}
+        </p>
+      )}
+
+      {review.isOwn && review.moderationStatus === "Pending" && (
+        <p className="text-xs text-gray-400 mt-2">
+          Your review is awaiting admin approval and isn't publicly visible yet.
+        </p>
+      )}
+
       {confirmingDelete ? (
         <div className="flex items-center gap-2 mt-2">
           <span className="text-xs text-gray-600">Delete this review?</span>
@@ -88,7 +112,7 @@ function ReviewCard({ review, onEdit, onDelete, onVote, confirmingDelete, onConf
           </button>
         </div>
       ) : (
-        !review.isOwn && (
+        !review.isOwn && isPublic && (
           <div className="flex items-center gap-3 mt-3">
             <span className="text-xs text-gray-400">Helpful?</span>
             <button
@@ -129,6 +153,7 @@ export default function ReviewsSection({ productId }) {
   const [formComment, setFormComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
+  const [submitSuccess, setSubmitSuccess] = useState(false);
 
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
 
@@ -164,6 +189,7 @@ export default function ReviewsSection({ productId }) {
     setFormRating(5);
     setFormComment("");
     setFormError("");
+    setSubmitSuccess(false);
     setShowForm(true);
   };
 
@@ -171,6 +197,7 @@ export default function ReviewsSection({ productId }) {
     setFormRating(ownReview.rating);
     setFormComment(ownReview.comment ?? "");
     setFormError("");
+    setSubmitSuccess(false);
     setShowForm(true);
   };
 
@@ -186,6 +213,7 @@ export default function ReviewsSection({ productId }) {
         await createReview(productId, formRating, formComment || null);
       }
       setShowForm(false);
+      setSubmitSuccess(true);
       await loadAll();
     } catch (err) {
       setFormError(err.response?.data ?? "Couldn't save your review.");
@@ -197,6 +225,7 @@ export default function ReviewsSection({ productId }) {
   const handleDelete = async (reviewId) => {
     await deleteReview(reviewId);
     setConfirmingDeleteId(null);
+    setSubmitSuccess(false);
     await loadAll();
   };
 
@@ -225,6 +254,12 @@ export default function ReviewsSection({ productId }) {
         </div>
       ) : (
         <p className="text-sm text-gray-400 mb-6">No reviews yet.</p>
+      )}
+
+      {submitSuccess && !showForm && (
+        <div className="mb-4 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+          Thanks! Your review has been submitted and is awaiting admin approval.
+        </div>
       )}
 
       <div className="flex items-center gap-3 mb-6">
@@ -266,6 +301,12 @@ export default function ReviewsSection({ productId }) {
       {showForm && (
         <form onSubmit={handleSubmit} className="bg-gray-50 border border-gray-200 rounded-xl p-5 mb-6 space-y-3">
           <p className="text-sm font-medium text-gray-900">{ownReview ? "Edit your review" : "Write a review"}</p>
+
+          {ownReview && (
+            <p className="text-xs text-gray-500">
+              Editing will send your review back through admin approval before it's public again.
+            </p>
+          )}
 
           {formError && (
             <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">

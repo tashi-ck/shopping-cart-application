@@ -77,5 +77,21 @@ namespace ShoppingCart.API.Controllers
                 return BadRequest(ex.Message);
             }
         }
+
+        [HttpGet("admin/processed")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> GetProcessedReviews()
+        {
+            var reviews = await _reviewService.GetProcessedReviewsAsync();
+            return Ok(reviews);
+        }
+
+        [HttpGet("admin/{id}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> GetReviewDetail(int id)
+        {
+            var detail = await _reviewService.GetReviewDetailForAdminAsync(id);
+            return detail is null ? NotFound() : Ok(detail);
+        }
     }
 }

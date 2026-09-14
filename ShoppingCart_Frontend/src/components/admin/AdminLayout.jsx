@@ -2,6 +2,7 @@ import { NavLink, Outlet } from "react-router-dom";
 import { LayoutDashboard, Package, FolderTree, ArrowLeft } from "lucide-react";
 import { ClipboardList } from "lucide-react";
 import { Users } from "lucide-react";
+import { MessageSquare } from "lucide-react";
 
 export default function AdminLayout() {
   const linkClass = ({ isActive }) =>
@@ -27,6 +28,9 @@ export default function AdminLayout() {
         </NavLink>
         <NavLink to="/admin/users" className={linkClass}>
            <Users size={16} /> Users
+        </NavLink>
+        <NavLink to="/admin/reviews" className={linkClass}>
+            <MessageSquare size={16} /> Reviews
         </NavLink>
 
         <NavLink to="/" className="flex items-center gap-2 px-3 py-2 mt-6 text-sm text-gray-500 hover:text-gray-900 transition">

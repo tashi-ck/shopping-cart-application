@@ -18,3 +18,5 @@ export const cancelOrder = (orderId) => axiosClient.post(`/orders/${orderId}/can
 export const getOrderForAdmin = (orderId) => axiosClient.get(`/orders/admin/${orderId}`);
 
 export const deleteOrder = (orderId) => axiosClient.delete(`/orders/admin/${orderId}`);
+
+export const getReviewableItems = (orderId) => axiosClient.get(`/orders/${orderId}/reviewable-items`);

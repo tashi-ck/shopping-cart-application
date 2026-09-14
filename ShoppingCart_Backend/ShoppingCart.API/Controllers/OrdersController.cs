@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ShoppingCart.Application.Interfaces;
+using ShoppingCart.Application.Services;
 using static ShoppingCart.Application.DTOs.OrderDtos;
 
 namespace ShoppingCart.API.Controllers
@@ -10,10 +11,12 @@ namespace ShoppingCart.API.Controllers
     public class OrdersController : AuthenticatedControllerBase
     {
         private readonly IOrderService _orderService;
+        private readonly IReviewService _reviewService;
 
-        public OrdersController(IOrderService orderService, IUserService userService) : base(userService)
+        public OrdersController(IOrderService orderService, IUserService userService, IReviewService reviewService) : base(userService)
         {
             _orderService = orderService;
+            _reviewService = reviewService;
         }
 
         [HttpGet]
@@ -114,6 +117,21 @@ namespace ShoppingCart.API.Controllers
         {
             var deleted = await _orderService.DeleteOrderAsync(id);
             return deleted ? NoContent() : NotFound();
+        }
+
+        [HttpGet("{id}/reviewable-items")]
+        public async Task<IActionResult> GetReviewableItems(int id)
+        {
+            try
+            {
+                var userId = await GetCurrentUserIdAsync();
+                var items = await _reviewService.GetReviewableItemsForOrderAsync(userId, id);
+                return Ok(items);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(ex.Message);
+            }
         }
     }
 }

@@ -6,17 +6,16 @@ using System.Threading.Tasks;
 
 namespace ShoppingCart.Core.Entities
 {
-    public class Review
+    public class PendingReviewInfo
     {
         public int ReviewId { get; set; }
         public int ProductId { get; set; }
-        public int UserId { get; set; }
-        public int OrderId { get; set; }
+        public string ProductName { get; set; } = string.Empty;
+        public string? UserFirstName { get; set; }
+        public string? UserLastName { get; set; }
         public int Rating { get; set; }
         public string? Comment { get; set; }
-        public string ModerationStatus { get; set; } = "Pending";
-        public string? RejectionReason { get; set; }
+        public string ModerationStatus { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
-        public DateTime UpdatedAt { get; set; }
     }
 }

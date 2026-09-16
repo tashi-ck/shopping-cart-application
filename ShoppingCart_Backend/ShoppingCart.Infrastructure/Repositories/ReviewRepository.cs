@@ -34,7 +34,8 @@ namespace ShoppingCart.Infrastructure.Repositories
             using var connection = _connectionFactory.CreateConnection();
             const string sql = """
             SELECT "ReviewId", "ProductId", "UserId", "OrderId", "Rating", "Comment",
-                   "ModerationStatus", "RejectionReason", "CreatedAt", "UpdatedAt"
+                   "ModerationStatus", "RejectionReason", "ModeratedBy", "AiModerationLabel",
+                   "AiConfidenceScore", "AiReasoning", "AiModeratedAt", "CreatedAt", "UpdatedAt"
             FROM "Reviews" WHERE "UserId" = @UserId AND "ProductId" = @ProductId
             """;
             return await connection.QuerySingleOrDefaultAsync<Review>(sql, new { UserId = userId, ProductId = productId });
@@ -45,7 +46,8 @@ namespace ShoppingCart.Infrastructure.Repositories
             using var connection = _connectionFactory.CreateConnection();
             const string sql = """
             SELECT "ReviewId", "ProductId", "UserId", "OrderId", "Rating", "Comment",
-                   "ModerationStatus", "RejectionReason", "CreatedAt", "UpdatedAt"
+                   "ModerationStatus", "RejectionReason", "ModeratedBy", "AiModerationLabel",
+                   "AiConfidenceScore", "AiReasoning", "AiModeratedAt", "CreatedAt", "UpdatedAt"
             FROM "Reviews" WHERE "ReviewId" = @ReviewId
             """;
             return await connection.QuerySingleOrDefaultAsync<Review>(sql, new { ReviewId = reviewId });
@@ -55,9 +57,17 @@ namespace ShoppingCart.Infrastructure.Repositories
         {
             using var connection = _connectionFactory.CreateConnection();
             const string sql = """
-            INSERT INTO "Reviews" ("ProductId", "UserId", "OrderId", "Rating", "Comment", "ModerationStatus", "CreatedAt", "UpdatedAt")
-            VALUES (@ProductId, @UserId, @OrderId, @Rating, @Comment, 'Pending', NOW(), NOW())
-            RETURNING "ReviewId", "ProductId", "UserId", "OrderId", "Rating", "Comment", "ModerationStatus", "RejectionReason", "CreatedAt", "UpdatedAt"
+            INSERT INTO "Reviews"
+                ("ProductId", "UserId", "OrderId", "Rating", "Comment", "ModerationStatus", "RejectionReason",
+                 "ModeratedBy", "AiModerationLabel", "AiConfidenceScore", "AiReasoning", "AiModeratedAt",
+                 "CreatedAt", "UpdatedAt")
+            VALUES
+                (@ProductId, @UserId, @OrderId, @Rating, @Comment, @ModerationStatus, @RejectionReason,
+                 @ModeratedBy, @AiModerationLabel, @AiConfidenceScore, @AiReasoning, @AiModeratedAt,
+                 NOW(), NOW())
+            RETURNING "ReviewId", "ProductId", "UserId", "OrderId", "Rating", "Comment", "ModerationStatus",
+                      "RejectionReason", "ModeratedBy", "AiModerationLabel", "AiConfidenceScore", "AiReasoning",
+                      "AiModeratedAt", "CreatedAt", "UpdatedAt"
             """;
             return await connection.QuerySingleAsync<Review>(sql, review);
         }
@@ -66,13 +76,15 @@ namespace ShoppingCart.Infrastructure.Repositories
         {
             using var connection = _connectionFactory.CreateConnection();
 
-            // Editing a review resets it back to Pending — an approved review that gets
-            // edited shouldn't stay published with unreviewed content. Same principle as
-            // re-moderation on any content-changing edit.
+            // Editing a review re-runs moderation (see ReviewService) rather than
+            // unconditionally resetting to Pending — the new ModerationStatus/Rejection/AI
+            // fields are all set explicitly by the caller based on that fresh verdict.
             const string sql = """
             UPDATE "Reviews"
-            SET "Rating" = @Rating, "Comment" = @Comment, "ModerationStatus" = 'Pending',
-                "RejectionReason" = NULL, "UpdatedAt" = NOW()
+            SET "Rating" = @Rating, "Comment" = @Comment, "ModerationStatus" = @ModerationStatus,
+                "RejectionReason" = @RejectionReason, "ModeratedBy" = @ModeratedBy,
+                "AiModerationLabel" = @AiModerationLabel, "AiConfidenceScore" = @AiConfidenceScore,
+                "AiReasoning" = @AiReasoning, "AiModeratedAt" = @AiModeratedAt, "UpdatedAt" = NOW()
             WHERE "ReviewId" = @ReviewId AND "UserId" = @UserId
             """;
             var rowsAffected = await connection.ExecuteAsync(sql, review);
@@ -96,7 +108,8 @@ namespace ShoppingCart.Infrastructure.Repositories
             // submission rather than it silently disappearing.
             const string sql = """
             SELECT r."ReviewId", r."ProductId", r."UserId", r."OrderId", r."Rating", r."Comment",
-                   r."ModerationStatus", r."RejectionReason", r."CreatedAt", r."UpdatedAt",
+                   r."ModerationStatus", r."RejectionReason", r."ModeratedBy", r."AiModerationLabel",
+                   r."AiConfidenceScore", r."AiReasoning", r."AiModeratedAt", r."CreatedAt", r."UpdatedAt",
                    u."FirstName" AS "UserFirstName", u."LastName" AS "UserLastName", u."Email" AS "UserEmail",
                    COALESCE(SUM(CASE WHEN v."IsHelpful" = TRUE THEN 1 ELSE 0 END), 0) AS "HelpfulCount",
                    COALESCE(SUM(CASE WHEN v."IsHelpful" = FALSE THEN 1 ELSE 0 END), 0) AS "NotHelpfulCount"
@@ -165,7 +178,8 @@ namespace ShoppingCart.Infrastructure.Repositories
             const string sql = """
         SELECT r."ReviewId", r."ProductId", p."Name" AS "ProductName",
                u."FirstName" AS "UserFirstName", u."LastName" AS "UserLastName",
-               r."Rating", r."Comment", r."ModerationStatus", r."CreatedAt"
+               r."Rating", r."Comment", r."ModerationStatus", r."CreatedAt",
+               r."ModeratedBy", r."AiModerationLabel", r."AiConfidenceScore"
         FROM "Reviews" r
         JOIN "Products" p ON p."ProductId" = r."ProductId"
         JOIN "Users" u ON u."UserId" = r."UserId"
@@ -178,8 +192,13 @@ namespace ShoppingCart.Infrastructure.Repositories
         public async Task<bool> ModerateAsync(int reviewId, string status, string? rejectionReason)
         {
             using var connection = _connectionFactory.CreateConnection();
+
+            // An explicit admin decision always overrides any prior AI verdict and
+            // is recorded as such — ModeratedBy flips to "Admin" here unconditionally.
             const string sql = """
-            UPDATE "Reviews" SET "ModerationStatus" = @Status, "RejectionReason" = @RejectionReason, "UpdatedAt" = NOW()
+            UPDATE "Reviews"
+            SET "ModerationStatus" = @Status, "RejectionReason" = @RejectionReason,
+                "ModeratedBy" = 'Admin', "UpdatedAt" = NOW()
             WHERE "ReviewId" = @ReviewId
             """;
             var rowsAffected = await connection.ExecuteAsync(sql, new { ReviewId = reviewId, Status = status, RejectionReason = rejectionReason });
@@ -192,7 +211,8 @@ namespace ShoppingCart.Infrastructure.Repositories
             const string sql = """
         SELECT r."ReviewId", r."ProductId", p."Name" AS "ProductName",
                u."FirstName" AS "UserFirstName", u."LastName" AS "UserLastName",
-               r."Rating", r."Comment", r."ModerationStatus", r."CreatedAt"
+               r."Rating", r."Comment", r."ModerationStatus", r."CreatedAt",
+               r."ModeratedBy", r."AiModerationLabel", r."AiConfidenceScore"
         FROM "Reviews" r
         JOIN "Products" p ON p."ProductId" = r."ProductId"
         JOIN "Users" u ON u."UserId" = r."UserId"
@@ -207,7 +227,8 @@ namespace ShoppingCart.Infrastructure.Repositories
             using var connection = _connectionFactory.CreateConnection();
             const string sql = """
         SELECT r."ReviewId", r."ProductId", r."UserId", r."OrderId", r."Rating", r."Comment",
-               r."ModerationStatus", r."RejectionReason", r."CreatedAt", r."UpdatedAt",
+               r."ModerationStatus", r."RejectionReason", r."ModeratedBy", r."AiModerationLabel",
+               r."AiConfidenceScore", r."AiReasoning", r."AiModeratedAt", r."CreatedAt", r."UpdatedAt",
                u."FirstName" AS "UserFirstName", u."LastName" AS "UserLastName", u."Email" AS "UserEmail",
                COALESCE(SUM(CASE WHEN v."IsHelpful" = TRUE THEN 1 ELSE 0 END), 0) AS "HelpfulCount",
                COALESCE(SUM(CASE WHEN v."IsHelpful" = FALSE THEN 1 ELSE 0 END), 0) AS "NotHelpfulCount"

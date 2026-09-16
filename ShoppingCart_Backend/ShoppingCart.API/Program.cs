@@ -60,6 +60,16 @@ builder.Services.AddScoped<IProductImageRepository, ProductImageRepository>();
 builder.Services.AddScoped<IReviewRepository, ReviewRepository>();
 builder.Services.AddScoped<IReviewService, ShoppingCart.Application.Services.ReviewService>();
 
+// Resilient HttpClient: short timeout so an outage fails fast and falls
+// through to "Flag" (=> Pending) in ReviewService, rather than hanging the request.
+builder.Services.AddHttpClient<IContentModerationService, AiContentModerationService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(8);
+    client.DefaultRequestHeaders.Authorization =
+        new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer", builder.Configuration["ContentModeration:ApiKey"]);
+});
+
 // Add services to the container.
 
 builder.Services.AddControllers();

@@ -18,5 +18,12 @@ namespace ShoppingCart.Core.Entities
         public string? RejectionReason { get; set; }
         public DateTime CreatedAt { get; set; }
         public DateTime UpdatedAt { get; set; }
+
+        // --- AI moderation metadata (new) ---
+        public string? ModeratedBy { get; set; }        // "AI" | "Admin" | null (still pending human/never touched)
+        public string? AiModerationLabel { get; set; }   // e.g. "clean", "advertising", "abusive"
+        public double? AiConfidenceScore { get; set; }
+        public string? AiReasoning { get; set; }
+        public DateTime? AiModeratedAt { get; set; }
     }
 }

@@ -91,7 +91,7 @@ function ReviewCard({ review, onEdit, onDelete, onVote, confirmingDelete, onConf
 
       {review.isOwn && review.moderationStatus === "Pending" && (
         <p className="text-xs text-gray-400 mt-2">
-          Your review is awaiting admin approval and isn't publicly visible yet.
+          Your review is awaiting approval and isn't publicly visible yet.
         </p>
       )}
 
@@ -140,6 +140,34 @@ function ReviewCard({ review, onEdit, onDelete, onVote, confirmingDelete, onConf
   );
 }
 
+// Maps the review's ACTUAL post-moderation status to the right banner copy.
+// Moderation can now resolve instantly (AI approve/reject), so this can no
+// longer be a single hardcoded "awaiting admin approval" message.
+function SubmitStatusBanner({ status }) {
+  if (status === "Approved") {
+    return (
+      <div className="mb-4 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+        Your review is live — thanks for sharing your feedback!
+      </div>
+    );
+  }
+
+  if (status === "Rejected") {
+    return (
+      <div className="mb-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+        Your review wasn't approved — see the reason below.
+      </div>
+    );
+  }
+
+  // Pending — covers both "AI flagged it for a human" and any moderation-service failure
+  return (
+    <div className="mb-4 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+      Thanks! Your review has been submitted and is awaiting approval.
+    </div>
+  );
+}
+
 export default function ReviewsSection({ productId }) {
   const { isAuthenticated, loginWithRedirect } = useAuth0();
 
@@ -153,10 +181,15 @@ export default function ReviewsSection({ productId }) {
   const [formComment, setFormComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
-  const [submitSuccess, setSubmitSuccess] = useState(false);
+  // Was a plain boolean (submitSuccess) — now holds the actual resulting
+  // moderationStatus ("Approved" | "Pending" | "Rejected") so the banner
+  // can say something true, instead of always claiming "awaiting admin approval".
+  const [submitStatus, setSubmitStatus] = useState(null);
 
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
 
+  // Returns the freshly-fetched reviews so callers can read the just-submitted
+  // review's real status without waiting on React state to re-render first.
   const loadAll = async () => {
     setLoading(true);
     const [reviewsRes, summaryRes] = await Promise.all([
@@ -177,6 +210,7 @@ export default function ReviewsSection({ productId }) {
       setEligibility(null);
     }
     setLoading(false);
+    return reviewsRes.data;
   };
 
   useEffect(() => {
@@ -189,7 +223,7 @@ export default function ReviewsSection({ productId }) {
     setFormRating(5);
     setFormComment("");
     setFormError("");
-    setSubmitSuccess(false);
+    setSubmitStatus(null);
     setShowForm(true);
   };
 
@@ -197,7 +231,7 @@ export default function ReviewsSection({ productId }) {
     setFormRating(ownReview.rating);
     setFormComment(ownReview.comment ?? "");
     setFormError("");
-    setSubmitSuccess(false);
+    setSubmitStatus(null);
     setShowForm(true);
   };
 
@@ -208,13 +242,20 @@ export default function ReviewsSection({ productId }) {
 
     try {
       if (ownReview) {
+        // updateReview's endpoint returns 204 No Content, so we can't read the
+        // new status off its response — reload and read it from there instead.
         await updateReview(ownReview.reviewId, formRating, formComment || null);
       } else {
+        // createReview DOES return the created ReviewDto with a real status,
+        // but reloading afterwards anyway keeps this path identical either way
+        // and guarantees `reviews`/`summary` are in sync with what's shown.
         await createReview(productId, formRating, formComment || null);
       }
       setShowForm(false);
-      setSubmitSuccess(true);
-      await loadAll();
+
+      const freshReviews = await loadAll();
+      const mine = freshReviews.find((r) => r.isOwn);
+      setSubmitStatus(mine?.moderationStatus ?? "Pending");
     } catch (err) {
       setFormError(err.response?.data ?? "Couldn't save your review.");
     } finally {
@@ -225,7 +266,7 @@ export default function ReviewsSection({ productId }) {
   const handleDelete = async (reviewId) => {
     await deleteReview(reviewId);
     setConfirmingDeleteId(null);
-    setSubmitSuccess(false);
+    setSubmitStatus(null);
     await loadAll();
   };
 
@@ -256,11 +297,7 @@ export default function ReviewsSection({ productId }) {
         <p className="text-sm text-gray-400 mb-6">No reviews yet.</p>
       )}
 
-      {submitSuccess && !showForm && (
-        <div className="mb-4 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-          Thanks! Your review has been submitted and is awaiting admin approval.
-        </div>
-      )}
+      {submitStatus && !showForm && <SubmitStatusBanner status={submitStatus} />}
 
       <div className="flex items-center gap-3 mb-6">
         {!showForm && isAuthenticated && eligibility?.canReview && (
@@ -304,7 +341,7 @@ export default function ReviewsSection({ productId }) {
 
           {ownReview && (
             <p className="text-xs text-gray-500">
-              Editing will send your review back through admin approval before it's public again.
+              Editing will send your review through moderation again before it's public.
             </p>
           )}
 

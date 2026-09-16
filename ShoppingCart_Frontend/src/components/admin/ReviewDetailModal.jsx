@@ -1,8 +1,44 @@
 import { useEffect, useState } from "react";
-import { X, User, Mail, Package, ThumbsUp, ThumbsDown, Check, XCircle } from "lucide-react";
+import { X, User, Mail, Package, ThumbsUp, ThumbsDown, Check, XCircle, Sparkles } from "lucide-react";
 import StarRating from "../StarRating";
 import ModerationStatusBadge from "./ModerationStatusBadge";
 import { getReviewDetailForAdmin, moderateReview } from "../../api/reviewApi";
+
+const aiPanelStyles = {
+  clean: "bg-green-50 border-green-100 text-green-800",
+  advertising: "bg-red-50 border-red-100 text-red-800",
+  spam: "bg-red-50 border-red-100 text-red-800",
+  abusive: "bg-red-50 border-red-100 text-red-800",
+  hate_speech: "bg-red-50 border-red-100 text-red-800",
+  suspicious: "bg-amber-50 border-amber-100 text-amber-800",
+};
+
+function AiModerationPanel({ detail }) {
+  if (!detail.aiModerationLabel) return null; // pre-dates this feature, or moderation never ran
+
+  const panelStyle = aiPanelStyles[detail.aiModerationLabel] ?? "bg-gray-50 border-gray-100 text-gray-700";
+  const confidencePct = detail.aiConfidenceScore != null ? Math.round(detail.aiConfidenceScore * 100) : null;
+
+  return (
+    <div className={`rounded-lg border p-3 ${panelStyle}`}>
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="flex items-center gap-1.5 text-xs font-semibold">
+          <Sparkles size={12} /> AI moderation
+        </span>
+        {confidencePct !== null && (
+          <span className="text-[11px] font-medium opacity-75">{confidencePct}% confidence</span>
+        )}
+      </div>
+      <p className="text-xs">
+        Classified as <span className="font-semibold">{detail.aiModerationLabel}</span>
+        {detail.moderatedBy === "Admin" && " — an admin has since overridden this"}
+      </p>
+      {detail.aiReasoning && (
+        <p className="text-xs mt-1 opacity-90">{detail.aiReasoning}</p>
+      )}
+    </div>
+  );
+}
 
 export default function ReviewDetailModal({ reviewId, onClose, onModerated }) {
   const [detail, setDetail] = useState(null);
@@ -59,6 +95,8 @@ export default function ReviewDetailModal({ reviewId, onClose, onModerated }) {
                 Submitted {new Date(detail.createdAt).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}
               </span>
             </div>
+
+            <AiModerationPanel detail={detail} />
 
             <div>
               <p className="text-xs text-gray-400 flex items-center gap-1.5 mb-1">

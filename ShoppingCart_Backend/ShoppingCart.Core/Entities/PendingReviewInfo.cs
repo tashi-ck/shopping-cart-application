@@ -17,5 +17,10 @@ namespace ShoppingCart.Core.Entities
         public string? Comment { get; set; }
         public string ModerationStatus { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
+
+        // New: lets the list view show "AI: suspicious (60%)" without a per-row detail fetch
+        public string? ModeratedBy { get; set; }
+        public string? AiModerationLabel { get; set; }
+        public double? AiConfidenceScore { get; set; }
     }
 }

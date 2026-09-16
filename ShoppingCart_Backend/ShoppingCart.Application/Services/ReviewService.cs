@@ -14,14 +14,19 @@ namespace ShoppingCart.Application.Services
         private readonly IReviewRepository _reviewRepository;
         private readonly IOrderRepository _orderRepository;
         private readonly IProductRepository _productRepository;
+        private readonly IContentModerationService _moderationService;
 
-        public ReviewService(IReviewRepository reviewRepository, IOrderRepository orderRepository, IProductRepository productRepository)
+        public ReviewService(
+            IReviewRepository reviewRepository,
+            IOrderRepository orderRepository,
+            IProductRepository productRepository,
+            IContentModerationService moderationService)
         {
             _reviewRepository = reviewRepository;
             _orderRepository = orderRepository;
             _productRepository = productRepository;
+            _moderationService = moderationService;
         }
-
 
         public async Task<IEnumerable<ReviewDto>> GetReviewsForProductAsync(int productId, int? currentUserId)
         {
@@ -73,13 +78,24 @@ namespace ShoppingCart.Application.Services
             var qualifyingOrderId = await _reviewRepository.GetQualifyingOrderIdAsync(userId, productId)
                 ?? throw new InvalidOperationException("You can review this product once your order has been delivered.");
 
+            var moderation = await SafeModerateAsync(dto.Comment, dto.Rating);
+
             var review = new Review
             {
                 ProductId = productId,
                 UserId = userId,
                 OrderId = qualifyingOrderId,
                 Rating = dto.Rating,
-                Comment = dto.Comment
+                Comment = dto.Comment,
+                ModerationStatus = ToStatus(moderation.Verdict),
+                RejectionReason = moderation.Verdict == ModerationVerdict.Reject
+                    ? BuildCustomerFacingReason(moderation.Label)
+                    : null,
+                ModeratedBy = moderation.Verdict == ModerationVerdict.Flag ? null : "AI",
+                AiModerationLabel = moderation.Label,
+                AiConfidenceScore = moderation.Confidence,
+                AiReasoning = moderation.Reasoning,
+                AiModeratedAt = DateTime.UtcNow
             };
 
             var created = await _reviewRepository.CreateAsync(review);
@@ -95,7 +111,27 @@ namespace ShoppingCart.Application.Services
             if (dto.Rating < 1 || dto.Rating > 5)
                 throw new InvalidOperationException("Rating must be between 1 and 5.");
 
-            var review = new Review { ReviewId = reviewId, UserId = userId, Rating = dto.Rating, Comment = dto.Comment };
+            // Re-moderate on every edit — an approved review shouldn't stay published
+            // if it's edited into something that would've been rejected outright.
+            var moderation = await SafeModerateAsync(dto.Comment, dto.Rating);
+
+            var review = new Review
+            {
+                ReviewId = reviewId,
+                UserId = userId,
+                Rating = dto.Rating,
+                Comment = dto.Comment,
+                ModerationStatus = ToStatus(moderation.Verdict),
+                RejectionReason = moderation.Verdict == ModerationVerdict.Reject
+                    ? BuildCustomerFacingReason(moderation.Label)
+                    : null,
+                ModeratedBy = moderation.Verdict == ModerationVerdict.Flag ? null : "AI",
+                AiModerationLabel = moderation.Label,
+                AiConfidenceScore = moderation.Confidence,
+                AiReasoning = moderation.Reasoning,
+                AiModeratedAt = DateTime.UtcNow
+            };
+
             return await _reviewRepository.UpdateAsync(review);
         }
 
@@ -134,9 +170,10 @@ namespace ShoppingCart.Application.Services
         {
             var pending = await _reviewRepository.GetPendingReviewsAsync();
             return pending.Select(p => new AdminReviewListItemDto(
-                p.ReviewId, p.ProductId, p.ProductName, 
+                p.ReviewId, p.ProductId, p.ProductName,
                 string.IsNullOrWhiteSpace(p.UserFirstName) ? "Anonymous" : $"{p.UserFirstName} {p.UserLastName}",
-                p.Rating, p.Comment, p.ModerationStatus, p.CreatedAt
+                p.Rating, p.Comment, p.ModerationStatus, p.CreatedAt,
+                p.ModeratedBy, p.AiModerationLabel, p.AiConfidenceScore
             ));
         }
 
@@ -148,21 +185,8 @@ namespace ShoppingCart.Application.Services
             var status = dto.Approve ? "Approved" : "Rejected";
             var reason = dto.Approve ? null : dto.RejectionReason;
 
+            // An admin decision always overrides whatever the AI decided, and is recorded as such.
             return await _reviewRepository.ModerateAsync(reviewId, status, reason);
-        }
-
-        private static ReviewDto MapToDto(ReviewWithUser r, int? currentUserId, bool? userVote)
-        {
-            var reviewerName = string.IsNullOrWhiteSpace(r.UserFirstName)
-                ? "Anonymous"
-                : $"{r.UserFirstName} {r.UserLastName?[..1]}.";
-
-            return new ReviewDto(
-                r.ReviewId, reviewerName, r.Rating, r.Comment, r.CreatedAt,
-                IsOwn: r.UserId == currentUserId, IsVerifiedPurchase: true,
-                r.HelpfulCount, r.NotHelpfulCount, userVote,
-                r.ModerationStatus, r.RejectionReason
-            );
         }
 
         public async Task<IEnumerable<AdminReviewListItemDto>> GetProcessedReviewsAsync()
@@ -171,9 +195,11 @@ namespace ShoppingCart.Application.Services
             return reviews.Select(r => new AdminReviewListItemDto(
                 r.ReviewId, r.ProductId, r.ProductName,
                 string.IsNullOrWhiteSpace(r.UserFirstName) ? "Anonymous" : $"{r.UserFirstName} {r.UserLastName}",
-                r.Rating, r.Comment, r.ModerationStatus, r.CreatedAt
+                r.Rating, r.Comment, r.ModerationStatus, r.CreatedAt,
+                r.ModeratedBy, r.AiModerationLabel, r.AiConfidenceScore
             ));
         }
+
 
         public async Task<AdminReviewDetailDto?> GetReviewDetailForAdminAsync(int reviewId)
         {
@@ -190,7 +216,53 @@ namespace ShoppingCart.Application.Services
                 review.OrderId, review.Rating, review.Comment,
                 review.ModerationStatus, review.RejectionReason,
                 review.HelpfulCount, review.NotHelpfulCount,
-                review.CreatedAt, review.UpdatedAt
+                review.CreatedAt, review.UpdatedAt,
+                review.ModeratedBy, review.AiModerationLabel, review.AiConfidenceScore, review.AiReasoning
+            );
+        }
+
+        // Fail-open: any moderation-service failure (timeout, bad API key, provider outage)
+        // becomes "Flag" (=> Pending), the same as today's default behavior. A moderation
+        // outage must never block a legitimate review submission.
+        private async Task<ContentModerationResult> SafeModerateAsync(string? comment, int rating)
+        {
+            try
+            {
+                return await _moderationService.ModerateReviewAsync(comment, rating);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Content moderation failed, falling back to manual review: {ex.Message}");
+                return new ContentModerationResult(
+                    ModerationVerdict.Flag, "suspicious", 0, "Moderation service unavailable", "none");
+            }
+        }
+
+        private static string ToStatus(ModerationVerdict verdict) => verdict switch
+        {
+            ModerationVerdict.Approve => "Approved",
+            ModerationVerdict.Reject => "Rejected",
+            _ => "Pending"
+        };
+
+        private static string BuildCustomerFacingReason(string label) => label switch
+        {
+            "spam" or "advertising" => "This review appears to contain promotional content or links, which isn't allowed.",
+            "abusive" or "hate_speech" => "This review contains language that violates our community guidelines.",
+            _ => "This review didn't meet our content guidelines."
+        };
+
+        private static ReviewDto MapToDto(ReviewWithUser r, int? currentUserId, bool? userVote)
+        {
+            var reviewerName = string.IsNullOrWhiteSpace(r.UserFirstName)
+                ? "Anonymous"
+                : $"{r.UserFirstName} {r.UserLastName?[..1]}.";
+
+            return new ReviewDto(
+                r.ReviewId, reviewerName, r.Rating, r.Comment, r.CreatedAt,
+                IsOwn: r.UserId == currentUserId, IsVerifiedPurchase: true,
+                r.HelpfulCount, r.NotHelpfulCount, userVote,
+                r.ModerationStatus, r.RejectionReason
             );
         }
     }

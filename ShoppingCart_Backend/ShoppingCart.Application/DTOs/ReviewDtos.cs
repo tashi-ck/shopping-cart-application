@@ -46,7 +46,8 @@ namespace ShoppingCart.Application.DTOs
 
         public record AdminReviewListItemDto(
             int ReviewId, int ProductId, string ProductName, string ReviewerName,
-            int Rating, string? Comment, string ModerationStatus, DateTime CreatedAt
+            int Rating, string? Comment, string ModerationStatus, DateTime CreatedAt,
+            string? ModeratedBy, string? AiModerationLabel, double? AiConfidenceScore
         );
 
         public record AdminReviewDetailDto(
@@ -55,7 +56,13 @@ namespace ShoppingCart.Application.DTOs
             int OrderId, int Rating, string? Comment,
             string ModerationStatus, string? RejectionReason,
             int HelpfulCount, int NotHelpfulCount,
-            DateTime CreatedAt, DateTime UpdatedAt
+            DateTime CreatedAt, DateTime UpdatedAt,
+            // AI moderation metadata — null when a review was submitted before this
+            // feature existed, or when it went straight to admin (moderation service failed)
+            string? ModeratedBy,
+            string? AiModerationLabel,
+            double? AiConfidenceScore,
+            string? AiReasoning
         );
     }
 }

@@ -44,7 +44,15 @@ namespace ShoppingCart.Infrastructure.Services
                     if (product is null || !product.IsActive || product.StockQuantity <= 0)
                         continue;
 
-                    results.Add(new SimilarProductDto(product.ProductId, product.Name, product.Price, product.ImageUrl, rec.Similarity));
+                    results.Add(new SimilarProductDto(
+                        product.ProductId,
+                        product.Name,
+                        product.CategoryName,
+                        product.Price,
+                        product.StockQuantity,
+                        product.ImageUrl,
+                        rec.Similarity
+                    ));
                 }
 
                 return results;

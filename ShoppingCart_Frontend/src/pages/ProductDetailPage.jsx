@@ -9,6 +9,7 @@ import { useCart } from "../context/CartContext";
 import { createBuyNowCheckoutSession, createGuestCheckoutSession } from "../api/paymentApi";
 import { getAddresses } from "../api/addressApi";
 import ReviewsSection from "../components/ReviewsSection";
+import SimilarProducts from "../components/SimilarProducts";
 
 export default function ProductDetailPage() {
   const { id } = useParams();
@@ -401,6 +402,7 @@ export default function ProductDetailPage() {
       </div>
 
       <ReviewsSection productId={product.productId} />
+      <SimilarProducts productId={product.productId} />
     </div>
   );
 }

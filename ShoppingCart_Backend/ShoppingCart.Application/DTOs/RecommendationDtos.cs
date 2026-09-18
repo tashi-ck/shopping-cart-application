@@ -8,6 +8,14 @@ namespace ShoppingCart.Application.DTOs
 {
     public class RecommendationDtos
     {
-        public record SimilarProductDto(int ProductId, string Name, decimal Price, string? ImageUrl, double Similarity);
+        public record SimilarProductDto(
+            int ProductId,
+            string Name,
+            string CategoryName,
+            decimal Price,
+            int StockQuantity,
+            string? ImageUrl,
+            double Similarity
+        );
     }
 }

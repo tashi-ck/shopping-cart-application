@@ -59,6 +59,7 @@ builder.Services.AddScoped<IAddressService, AddressService>();
 builder.Services.AddScoped<IProductImageRepository, ProductImageRepository>();
 builder.Services.AddScoped<IReviewRepository, ReviewRepository>();
 builder.Services.AddScoped<IReviewService, ShoppingCart.Application.Services.ReviewService>();
+builder.Services.AddHttpClient<IRecommendationService, RecommendationService>();
 
 // Resilient HttpClient: short timeout so an outage fails fast and falls
 // through to "Flag" (=> Pending) in ReviewService, rather than hanging the request.

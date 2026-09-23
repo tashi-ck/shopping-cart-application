@@ -1,6 +1,7 @@
 ﻿using Dapper;
 using Npgsql;
 using ShoppingCart.Application.Interfaces;
+using ShoppingCart.Application.Models;
 using ShoppingCart.Core.Entities;
 using System;
 using System.Collections.Generic;
@@ -19,7 +20,8 @@ namespace ShoppingCart.Infrastructure.Repositories
         {
             using var connection = _connectionFactory.CreateConnection();
             const string sql = """
-                SELECT "UserId", "Auth0Id", "Email", "FirstName", "LastName", "IsActive", "IsAdmin", "CreatedAt", "UpdatedAt"
+                SELECT "UserId", "Auth0Id", "Email", "FirstName", "LastName", "IsActive", "IsAdmin",
+                       "HasCompletedOnboarding", "CreatedAt", "UpdatedAt"
                 FROM "Users" WHERE "Auth0Id" = @Auth0Id
                 """;
             return await connection.QuerySingleOrDefaultAsync<User>(sql, new { Auth0Id = auth0Id });
@@ -31,7 +33,8 @@ namespace ShoppingCart.Infrastructure.Repositories
             const string sql = """
                 INSERT INTO "Users" ("Auth0Id", "Email", "FirstName", "LastName", "IsAdmin", "CreatedAt", "UpdatedAt")
                 VALUES (@Auth0Id, @Email, @FirstName, @LastName, @IsAdmin, NOW(), NOW())
-                RETURNING "UserId", "Auth0Id", "Email", "FirstName", "LastName", "IsActive", "IsAdmin", "CreatedAt", "UpdatedAt"
+                RETURNING "UserId", "Auth0Id", "Email", "FirstName", "LastName", "IsActive", "IsAdmin",
+                          "HasCompletedOnboarding", "CreatedAt", "UpdatedAt"
                 """;
             return await connection.QuerySingleAsync<User>(sql, user);
         }
@@ -51,7 +54,8 @@ namespace ShoppingCart.Infrastructure.Repositories
         {
             using var connection = _connectionFactory.CreateConnection();
             const string sql = """
-        SELECT "UserId", "Auth0Id", "Email", "FirstName", "LastName", "CreatedAt", "UpdatedAt"
+        SELECT "UserId", "Auth0Id", "Email", "FirstName", "LastName",
+               "HasCompletedOnboarding", "CreatedAt", "UpdatedAt"
         FROM "Users"
         WHERE "UserId" = @UserId
         """;
@@ -96,9 +100,6 @@ namespace ShoppingCart.Infrastructure.Repositories
             }
             catch (PostgresException ex) when (ex.SqlState == "23503")
             {
-                // Same FK situation as deleting a Product tied to an order — Orders.UserId has
-                // no ON DELETE CASCADE, so a user with order history can't be hard-deleted.
-                // Catching it here means the API returns a clean message instead of a raw 500.
                 throw new InvalidOperationException(
                     "Can't delete this user — they have existing orders. Deactivate the account instead.");
             }
@@ -131,6 +132,74 @@ namespace ShoppingCart.Infrastructure.Repositories
         RETURNING "UserId", "Auth0Id", "Email", "FirstName", "LastName", "IsActive", "IsAdmin", "IsGuest", "CreatedAt", "UpdatedAt"
         """;
             return await connection.QuerySingleAsync<User>(insertSql, new { Email = email });
+        }
+
+        // --- Onboarding / personalization (new) ---
+
+        public async Task SaveOnboardingAsync(int userId, List<int> categoryIds, decimal? minBudget, decimal? maxBudget, string shoppingPriority)
+        {
+            using var connection = _connectionFactory.CreateConnection();
+            connection.Open();
+            using var transaction = connection.BeginTransaction();
+
+            try
+            {
+                const string updateUserSql = """
+                UPDATE "Users"
+                SET "HasCompletedOnboarding" = TRUE, "PreferredMinPrice" = @MinBudget,
+                    "PreferredMaxPrice" = @MaxBudget, "ShoppingPriority" = @ShoppingPriority, "UpdatedAt" = NOW()
+                WHERE "UserId" = @UserId
+                """;
+                await connection.ExecuteAsync(updateUserSql,
+                    new { UserId = userId, MinBudget = minBudget, MaxBudget = maxBudget, ShoppingPriority = shoppingPriority },
+                    transaction);
+
+                // Simplest correct approach for a small preference set: clear and re-insert,
+                // rather than diffing — onboarding is submitted once as a whole, not incrementally.
+                const string deleteSql = """DELETE FROM "UserPreferredCategories" WHERE "UserId" = @UserId""";
+                await connection.ExecuteAsync(deleteSql, new { UserId = userId }, transaction);
+
+                const string insertSql = """
+                INSERT INTO "UserPreferredCategories" ("UserId", "CategoryId") VALUES (@UserId, @CategoryId)
+                """;
+                foreach (var categoryId in categoryIds)
+                {
+                    await connection.ExecuteAsync(insertSql, new { UserId = userId, CategoryId = categoryId }, transaction);
+                }
+
+                transaction.Commit();
+            }
+            catch
+            {
+                transaction.Rollback();
+                throw;
+            }
+        }
+
+        public async Task<UserPreferences?> GetPreferencesAsync(int userId)
+        {
+            using var connection = _connectionFactory.CreateConnection();
+
+            const string userSql = """
+                SELECT "PreferredMinPrice" AS "MinBudget", "PreferredMaxPrice" AS "MaxBudget",
+                       "ShoppingPriority", "HasCompletedOnboarding"
+                FROM "Users" WHERE "UserId" = @UserId
+                """;
+            var row = await connection.QuerySingleOrDefaultAsync<UserPreferencesRow>(userSql, new { UserId = userId });
+            if (row is null || !row.HasCompletedOnboarding) return null;
+
+            const string categoriesSql = """SELECT "CategoryId" FROM "UserPreferredCategories" WHERE "UserId" = @UserId""";
+            var categoryIds = (await connection.QueryAsync<int>(categoriesSql, new { UserId = userId })).ToList();
+
+            return new UserPreferences(categoryIds, row.MinBudget, row.MaxBudget, row.ShoppingPriority);
+        }
+
+        private class UserPreferencesRow
+        {
+            public decimal? MinBudget { get; set; }
+            public decimal? MaxBudget { get; set; }
+            public string? ShoppingPriority { get; set; }
+            public bool HasCompletedOnboarding { get; set; }
         }
     }
 }

@@ -14,22 +14,23 @@ namespace ShoppingCart.Application.Services
         private readonly IProductRepository _productRepository;
         private readonly IProductImageRepository _productImageRepository;
         private readonly ILowStockAlertService _lowStockAlertService;
+        private readonly IUserRepository _userRepository;
+
         public ProductService(
             IProductRepository productRepository,
             IProductImageRepository productImageRepository,
-            ILowStockAlertService lowStockAlertService)
+            ILowStockAlertService lowStockAlertService,
+            IUserRepository userRepository)
         {
             _productRepository = productRepository;
             _productImageRepository = productImageRepository;
             _lowStockAlertService = lowStockAlertService;
+            _userRepository = userRepository;
         }
 
         public async Task<IEnumerable<ProductDto>> GetAllProductsAsync(int? categoryId, string? search, string? sortBy, bool includeInactive = false)
         {
             var products = await _productRepository.GetAllAsync(categoryId, search, sortBy, includeInactive);
-            // Gallery images intentionally NOT fetched here — the product grid only ever
-            // shows the single thumbnail (Products.ImageUrl); fetching every product's full
-            // gallery on every listing request would be a needless N+1 query pattern.
             return products.Select(p => MapToDto(p, new List<ProductImageDto>()));
         }
 
@@ -117,6 +118,54 @@ namespace ShoppingCart.Application.Services
 
         public Task ReorderProductImagesAsync(int productId, ReorderProductImagesDto dto) =>
             _productImageRepository.ReorderAsync(productId, dto.ProductImageIds);
+
+        // --- Personalized recommendations (new) ---
+        public async Task<IEnumerable<ProductDto>> GetPersonalizedProductsAsync(int userId, int limit = 12)
+        {
+            var preferences = await _userRepository.GetPreferencesAsync(userId);
+
+            // No onboarding data (or the user skipped) — fall back to newest active
+            // products rather than showing an empty/blank section.
+            if (preferences is null)
+            {
+                var newest = await _productRepository.GetAllAsync(sortBy: "newest");
+                return newest.Take(limit).Select(p => MapToDto(p, new List<ProductImageDto>()));
+            }
+
+            var allProducts = (await _productRepository.GetAllAsync()).ToList();
+
+            var scored = allProducts
+                .Select(p =>
+                {
+                    double score = 0;
+
+                    if (preferences.PreferredCategoryIds.Contains(p.CategoryId))
+                        score += 3;
+
+                    var withinBudget =
+                        (preferences.MinBudget is null || p.Price >= preferences.MinBudget) &&
+                        (preferences.MaxBudget is null || p.Price <= preferences.MaxBudget);
+                    if (withinBudget)
+                        score += 2;
+
+                    // Small tiebreak nudge based on the stated shopping priority —
+                    // never overrides the category/budget match, just orders within it.
+                    score += preferences.ShoppingPriority switch
+                    {
+                        "Price" => (double)(2000m - Math.Min(p.Price, 2000m)) / 2000.0,
+                        "Trending" => Math.Max(0, 1 - (DateTime.UtcNow - p.CreatedAt).TotalDays / 365.0),
+                        _ => 0
+                    };
+
+                    return (Product: p, Score: score);
+                })
+                .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.Product.Name)
+                .Take(limit)
+                .Select(x => x.Product);
+
+            return scored.Select(p => MapToDto(p, new List<ProductImageDto>()));
+        }
 
         private static ProductDto MapToDto(ProductWithCategory p, List<ProductImageDto> images) => new(
             p.ProductId, p.CategoryId, p.CategoryName, p.Name, p.Description,

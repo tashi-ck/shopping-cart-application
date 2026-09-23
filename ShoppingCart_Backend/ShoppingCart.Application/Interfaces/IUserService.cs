@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using static ShoppingCart.Application.DTOs.OnboardingDtos;
 using static ShoppingCart.Application.DTOs.UserDtos;
 
 namespace ShoppingCart.Application.Interfaces
@@ -14,6 +15,7 @@ namespace ShoppingCart.Application.Interfaces
         Task<IEnumerable<AdminUserDto>> GetAllUsersForAdminAsync();
         Task<bool> SetUserActiveAsync(int userId, bool isActive);
         Task<bool> DeleteUserAsync(int userId);
+        Task CompleteOnboardingAsync(int userId, SubmitOnboardingDto dto);
 
     }
 }

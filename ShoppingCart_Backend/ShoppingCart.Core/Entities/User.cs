@@ -19,5 +19,11 @@ namespace ShoppingCart.Core.Entities
         public bool IsAdmin { get; set; }
         public bool IsGuest { get; set; }
 
+        // --- Onboarding / personalization (new) ---
+        public bool HasCompletedOnboarding { get; set; }
+        public decimal? PreferredMinPrice { get; set; }
+        public decimal? PreferredMaxPrice { get; set; }
+        public string? ShoppingPriority { get; set; } // "Price" | "Quality" | "Trending"
+
     }
 }

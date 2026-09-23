@@ -1,4 +1,5 @@
-﻿using ShoppingCart.Core.Entities;
+﻿using ShoppingCart.Application.Models;
+using ShoppingCart.Core.Entities;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -18,5 +19,9 @@ namespace ShoppingCart.Application.Interfaces
         Task<bool> DeleteAsync(int userId);
         Task<IEnumerable<User>> GetAdminUsersAsync();
         Task<User> GetOrCreateGuestUserAsync(string email);
+
+        // --- Onboarding / personalization (new) ---
+        Task SaveOnboardingAsync(int userId, List<int> categoryIds, decimal? minBudget, decimal? maxBudget, string shoppingPriority);
+        Task<UserPreferences?> GetPreferencesAsync(int userId);
     }
 }

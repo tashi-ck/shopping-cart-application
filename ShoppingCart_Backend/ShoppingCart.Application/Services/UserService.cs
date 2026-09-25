@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using static ShoppingCart.Application.DTOs.OnboardingDtos;
 using static ShoppingCart.Application.DTOs.UserDtos;
 
 namespace ShoppingCart.Application.Services
@@ -27,7 +28,7 @@ namespace ShoppingCart.Application.Services
                 var hasChanges = existing.Email != profile.Email
                     || existing.FirstName != profile.FirstName
                     || existing.LastName != profile.LastName
-                    || existing.IsAdmin != isAdmin; // keeps local admin flag in sync with Auth0's role assignment
+                    || existing.IsAdmin != isAdmin;
 
                 if (hasChanges)
                 {
@@ -38,7 +39,8 @@ namespace ShoppingCart.Application.Services
                     await _userRepository.UpdateProfileAsync(existing);
                 }
 
-                return new UserDto(existing.UserId, existing.Email, existing.FirstName, existing.LastName, existing.IsActive);
+                return new UserDto(existing.UserId, existing.Email, existing.FirstName, existing.LastName,
+                    existing.IsActive, existing.HasCompletedOnboarding);
             }
 
             var newUser = new User
@@ -51,13 +53,16 @@ namespace ShoppingCart.Application.Services
             };
 
             var created = await _userRepository.CreateAsync(newUser);
-            return new UserDto(created.UserId, created.Email, created.FirstName, created.LastName, created.IsActive);
+            return new UserDto(created.UserId, created.Email, created.FirstName, created.LastName,
+                created.IsActive, created.HasCompletedOnboarding);
         }
 
         public async Task<UserDto?> GetProfileByIdAsync(int userId)
         {
             var user = await _userRepository.GetByIdAsync(userId);
-            return user is null ? null : new UserDto(user.UserId, user.Email, user.FirstName, user.LastName, user.IsActive);
+            return user is null
+                ? null
+                : new UserDto(user.UserId, user.Email, user.FirstName, user.LastName, user.IsActive, user.HasCompletedOnboarding);
         }
 
         public async Task<IEnumerable<AdminUserDto>> GetAllUsersForAdminAsync()
@@ -73,5 +78,17 @@ namespace ShoppingCart.Application.Services
 
         public Task<bool> DeleteUserAsync(int userId) =>
             _userRepository.DeleteAsync(userId);
+
+        public async Task CompleteOnboardingAsync(int userId, SubmitOnboardingDto dto)
+        {
+            var validPriorities = new HashSet<string> { "Price", "Quality", "Trending" };
+            var priority = validPriorities.Contains(dto.ShoppingPriority) ? dto.ShoppingPriority : "Trending";
+
+            if (dto.MinBudget is not null && dto.MaxBudget is not null && dto.MinBudget > dto.MaxBudget)
+                throw new InvalidOperationException("Minimum budget can't be greater than maximum budget.");
+
+            await _userRepository.SaveOnboardingAsync(
+                userId, dto.PreferredCategoryIds ?? new List<int>(), dto.MinBudget, dto.MaxBudget, priority);
+        }
     }
 }

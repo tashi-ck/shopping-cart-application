@@ -13,7 +13,8 @@ namespace ShoppingCart.Application.DTOs
             string Email, 
             string? FirstName, 
             string? LastName, 
-            bool IsActive
+            bool IsActive,
+            bool HasCompletedOnboarding
         );
 
         public record Auth0ProfileDto(

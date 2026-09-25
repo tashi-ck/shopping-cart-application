@@ -1,6 +1,5 @@
 import { Routes, Route } from "react-router-dom";
 import AppLayout from "./components/AppLayout";
-import Navbar from "./components/Navbar";
 import ProtectedRoute from "./components/ProtectedRoute";
 import AdminRoute from "./components/AdminRoute";
 import AdminLayout from "./components/admin/AdminLayout";
@@ -21,11 +20,15 @@ import AddressesPage from "./pages/AddressesPage";
 import ProfilePage from "./pages/ProfilePage";
 import GuestCheckoutSuccessPage from "./pages/GuestCheckoutSuccessPage";
 import AdminReviewsPage from "./pages/admin/AdminReviewsPage";
+import OnboardingPage from "./pages/OnboardingPage";
 
 export default function App() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Routes>
+        {/* Full-screen wizard — deliberately outside AppLayout, no Navbar clutter */}
+        <Route path="/onboarding" element={<ProtectedRoute><OnboardingPage /></ProtectedRoute>} />
+
         <Route element={<AppLayout />}>
           <Route path="/" element={<ProductsPage />} />
           <Route path="/products/:id" element={<ProductDetailPage />} />

@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ShoppingCart.Application.Interfaces;
+using static ShoppingCart.Application.DTOs.OnboardingDtos;
 using static ShoppingCart.Application.DTOs.UserDtos;
 
 namespace ShoppingCart.API.Controllers
@@ -20,8 +21,23 @@ namespace ShoppingCart.API.Controllers
         public async Task<IActionResult> GetOrSyncCurrentUser()
         {
             var userId = await GetCurrentUserIdAsync();
-            var profile = await _userService.GetProfileByIdAsync(userId); 
+            var profile = await _userService.GetProfileByIdAsync(userId);
             return Ok(profile);
+        }
+
+        [HttpPost("onboarding")]
+        public async Task<IActionResult> SubmitOnboarding([FromBody] SubmitOnboardingDto dto)
+        {
+            try
+            {
+                var userId = await GetCurrentUserIdAsync();
+                await _userService.CompleteOnboardingAsync(userId, dto);
+                return NoContent();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(ex.Message);
+            }
         }
 
         [HttpGet("admin")]

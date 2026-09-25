@@ -25,3 +25,6 @@ export const reorderProductImages = (productId, productImageIds) =>
   axiosClient.put(`/products/${productId}/images/reorder`, { productImageIds });
 
 export const getProduct = (id) => axiosClient.get(`/products/${id}`);
+
+export const getPersonalizedProducts = (limit = 12) =>
+  axiosClient.get("/products/for-you", { params: { limit } });

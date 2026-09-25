@@ -8,6 +8,7 @@ import { getProducts } from "../api/productApi";
 import { getCategories } from "../api/categoryApi";
 import { useCart } from "../context/CartContext";
 import ProductCard from "../components/ProductCard";
+import PersonalizedRecommendations from "../components/PersonalizedRecommendations";
 
 const SORT_OPTIONS = [
   { value: "", label: "Name (A–Z)" },
@@ -119,6 +120,10 @@ export default function ProductsPage() {
           The live count now lives in the sticky toolbar below, where it's actually useful. */}
       <div className="px-6 sm:px-8 pb-4">
         <p className="text-xs text-gray-400 mb-1">Home / Products</p>
+      </div>
+
+      <div className="px-6 sm:px-8">
+        <PersonalizedRecommendations />
       </div>
 
       <div className="flex gap-6 items-start px-6 sm:px-8">

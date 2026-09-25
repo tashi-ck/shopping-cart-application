@@ -18,5 +18,6 @@ namespace ShoppingCart.Application.Interfaces
         Task<ProductImageDto> AddProductImageAsync(int productId, AddProductImageDto dto);
         Task<bool> DeleteProductImageAsync(int productId, int productImageId);
         Task ReorderProductImagesAsync(int productId, ReorderProductImagesDto dto);
+        Task<IEnumerable<ProductDto>> GetPersonalizedProductsAsync(int userId, int limit = 12);
     }
 }

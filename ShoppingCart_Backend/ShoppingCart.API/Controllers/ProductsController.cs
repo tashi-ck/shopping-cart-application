@@ -7,19 +7,21 @@ namespace ShoppingCart.API.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    public class ProductsController : ControllerBase
+    public class ProductsController : AuthenticatedControllerBase
     {
         private readonly IProductService _productService;
-        public ProductsController(IProductService productService) => _productService = productService;
+
+        public ProductsController(IProductService productService, IUserService userService) : base(userService)
+        {
+            _productService = productService;
+        }
 
         [HttpGet]
+        [AllowAnonymous]
         public async Task<IActionResult> GetProducts(
             [FromQuery] int? categoryId, [FromQuery] string? search, [FromQuery] string? sortBy,
             [FromQuery] bool includeInactive = false)
         {
-            // Even though this endpoint has no [Authorize], the JWT middleware still populates
-            // User if a valid token was sent — so we can check the role claim here without
-            // requiring auth for everyone else browsing anonymously.
             var isAdmin = User.IsInRole("Admin");
             var effectiveIncludeInactive = includeInactive && isAdmin;
 
@@ -28,10 +30,21 @@ namespace ShoppingCart.API.Controllers
         }
 
         [HttpGet("{id}")]
+        [AllowAnonymous]
         public async Task<IActionResult> GetProduct(int id)
         {
             var product = await _productService.GetProductAsync(id);
             return product is null ? NotFound() : Ok(product);
+        }
+
+        // Requires auth (class-level [Authorize] from AuthenticatedControllerBase) —
+        // recommendations only make sense for a signed-in, onboarded user.
+        [HttpGet("for-you")]
+        public async Task<IActionResult> GetPersonalizedProducts([FromQuery] int limit = 12)
+        {
+            var userId = await GetCurrentUserIdAsync();
+            var products = await _productService.GetPersonalizedProductsAsync(userId, limit);
+            return Ok(products);
         }
 
         [HttpPost]

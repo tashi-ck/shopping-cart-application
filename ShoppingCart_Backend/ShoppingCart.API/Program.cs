@@ -60,6 +60,8 @@ builder.Services.AddScoped<IProductImageRepository, ProductImageRepository>();
 builder.Services.AddScoped<IReviewRepository, ReviewRepository>();
 builder.Services.AddScoped<IReviewService, ShoppingCart.Application.Services.ReviewService>();
 builder.Services.AddHttpClient<IRecommendationService, RecommendationService>();
+builder.Services.AddScoped<IPolicyRepository, PolicyRepository>();
+builder.Services.AddScoped<IPolicyService, PolicyService>();
 
 // Resilient HttpClient: short timeout so an outage fails fast and falls
 // through to "Flag" (=> Pending) in ReviewService, rather than hanging the request.
@@ -69,6 +71,16 @@ builder.Services.AddHttpClient<IContentModerationService, AiContentModerationSer
     client.DefaultRequestHeaders.Authorization =
         new System.Net.Http.Headers.AuthenticationHeaderValue(
             "Bearer", builder.Configuration["ContentModeration:ApiKey"]);
+});
+
+// Same resilience posture as content moderation: short timeout so an outage
+// fails fast into AiChatService's fallback reply, instead of hanging the request.
+builder.Services.AddHttpClient<IChatService, AiChatService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(15);
+    client.DefaultRequestHeaders.Authorization =
+        new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer", builder.Configuration["Chatbot:ApiKey"]);
 });
 
 // Add services to the container.

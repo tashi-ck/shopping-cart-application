@@ -1,4 +1,5 @@
 import { Routes, Route } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import AppLayout from "./components/AppLayout";
 import ProtectedRoute from "./components/ProtectedRoute";
 import AdminRoute from "./components/AdminRoute";
@@ -21,8 +22,15 @@ import ProfilePage from "./pages/ProfilePage";
 import GuestCheckoutSuccessPage from "./pages/GuestCheckoutSuccessPage";
 import AdminReviewsPage from "./pages/admin/AdminReviewsPage";
 import OnboardingPage from "./pages/OnboardingPage";
+import PoliciesPage from "./pages/PoliciesPage";
+import AdminPoliciesPage from "./pages/admin/AdminPoliciesPage";
+import ChatWidget from "./components/ChatWidget";
 
 export default function App() {
+  
+  const location = useLocation();
+  const showChat = location.pathname !== "/onboarding";
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Routes>
@@ -40,6 +48,7 @@ export default function App() {
           <Route path="/addresses" element={<ProtectedRoute><AddressesPage /></ProtectedRoute>} />
           <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
           <Route path="/checkout/guest-success" element={<GuestCheckoutSuccessPage />} />
+          <Route path="/policies" element={<PoliciesPage />} />
         </Route>
 
         <Route
@@ -57,8 +66,10 @@ export default function App() {
           <Route path="orders/:id" element={<AdminOrderDetailPage />} />
           <Route path="users" element={<AdminUsersPage />} />
           <Route path="reviews" element={<AdminReviewsPage />} />
+          <Route path="policies" element={<AdminPoliciesPage />} />
         </Route>
       </Routes>
+      {showChat && <ChatWidget />}
     </div>
   );
 }

@@ -1,43 +1,57 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { useAuth0 } from "@auth0/auth0-react";
 import { MessageCircle, X, Send, Loader2, Bot } from "lucide-react";
 import { sendChatMessage } from "../api/chatApi";
 
-const GREETING = {
+const GUEST_GREETING = {
   role: "assistant",
-  content: "Hi! I'm the Go Shopping assistant. Ask me about shipping, returns, cancellations, or how ordering works.",
+  content: "Hi! I'm the Go Shopping assistant. Ask me about shipping, returns, cancellations, or how ordering works. Log in and I can also check your orders.",
 };
 
+const USER_GREETING = {
+  role: "assistant",
+  content: "Hi! I can answer questions about our policies and check on your orders. What can I help with?",
+};
+
+const GUEST_SUGGESTIONS = ["What's your return policy?", "Can I cancel an order?", "How does guest checkout work?"];
+const USER_SUGGESTIONS = ["Where is my latest order?", "Can I still cancel my order?", "What's your return policy?"];
+
 export default function ChatWidget() {
+  const { isAuthenticated } = useAuth0();
+  const greeting = isAuthenticated ? USER_GREETING : GUEST_GREETING;
+  const suggestions = isAuthenticated ? USER_SUGGESTIONS : GUEST_SUGGESTIONS;
+
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState([GREETING]);
+  const [messages, setMessages] = useState([greeting]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const scrollRef = useRef(null);
+
+  // A guest conversation ("please log in first") shouldn't carry over after logging in,
+  // and one user's chat shouldn't linger on screen after logging out.
+  useEffect(() => {
+    setMessages([isAuthenticated ? USER_GREETING : GUEST_GREETING]);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, open]);
+  }, [messages, open, sending]);
 
-  const handleSend = async (e) => {
-    e.preventDefault();
-    const trimmed = input.trim();
+  const send = async (text) => {
+    const trimmed = text.trim();
     if (!trimmed || sending) return;
 
-    const nextMessages = [...messages, { role: "user", content: trimmed }];
-    setMessages(nextMessages);
+    const priorHistory = messages.slice(1).map((m) => ({ role: m.role, content: m.content }));
+
+    setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
     setInput("");
     setSending(true);
 
     try {
-      // Send the conversation so far (excluding the greeting, which isn't a real
-      // exchange) as history, plus the new message.
-      const history = nextMessages
-        .slice(1)
-        .map((m) => ({ role: m.role, content: m.content }));
-
-      const res = await sendChatMessage(trimmed, history.slice(0, -1));
+      const res = await sendChatMessage(trimmed, priorHistory);
       setMessages((prev) => [...prev, { role: "assistant", content: res.data.reply }]);
     } catch {
       setMessages((prev) => [
@@ -49,10 +63,17 @@ export default function ChatWidget() {
     }
   };
 
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    send(input);
+  };
+
+  const showSuggestions = messages.length === 1 && !sending;
+
   return (
     <div className="fixed bottom-5 right-5 z-50">
       {open && (
-        <div className="mb-3 w-80 sm:w-96 h-[28rem] bg-white rounded-2xl border border-gray-200 shadow-xl flex flex-col overflow-hidden">
+        <div className="mb-3 w-80 sm:w-96 h-[30rem] bg-white rounded-2xl border border-gray-200 shadow-xl flex flex-col overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-br from-indigo-600 to-violet-600 text-white shrink-0">
             <span className="flex items-center gap-2 text-sm font-semibold">
               <Bot size={16} /> Shopping Assistant
@@ -71,7 +92,7 @@ export default function ChatWidget() {
             {messages.map((m, i) => (
               <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
-                  className={`max-w-[85%] text-sm rounded-2xl px-3.5 py-2 leading-relaxed ${
+                  className={`max-w-[85%] text-sm rounded-2xl px-3.5 py-2 leading-relaxed whitespace-pre-line ${
                     m.role === "user"
                       ? "bg-indigo-600 text-white rounded-br-sm"
                       : "bg-white border border-gray-200 text-gray-700 rounded-bl-sm"
@@ -81,6 +102,22 @@ export default function ChatWidget() {
                 </div>
               </div>
             ))}
+
+            {showSuggestions && (
+              <div className="flex flex-wrap gap-2 pt-1">
+                {suggestions.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => send(s)}
+                    className="text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-full px-3 py-1.5 hover:bg-indigo-100 transition"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {sending && (
               <div className="flex justify-start">
                 <div className="bg-white border border-gray-200 rounded-2xl rounded-bl-sm px-3.5 py-2">
@@ -90,12 +127,18 @@ export default function ChatWidget() {
             )}
           </div>
 
-          <form onSubmit={handleSend} className="flex items-center gap-2 p-3 border-t border-gray-100 bg-white shrink-0">
+          {isAuthenticated && (
+            <div className="px-4 py-1.5 bg-gray-50 border-t border-gray-100 text-[11px] text-gray-400 shrink-0">
+              Want full details? <Link to="/orders" onClick={() => setOpen(false)} className="text-indigo-600 hover:text-indigo-700">View my orders</Link>
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="flex items-center gap-2 p-3 border-t border-gray-100 bg-white shrink-0">
             <input
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask about shipping, returns..."
+              placeholder={isAuthenticated ? "Ask about your orders or our policies..." : "Ask about shipping, returns..."}
               maxLength={1000}
               className="flex-1 rounded-full border border-gray-200 bg-gray-50 focus:bg-white px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
             />

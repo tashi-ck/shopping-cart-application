@@ -1,4 +1,4 @@
-import { Outlet, Navigate, useLocation } from "react-router-dom";
+import { Outlet, Navigate, useLocation, Link } from "react-router-dom";
 import { useAuth0 } from "@auth0/auth0-react";
 import { useAppUser } from "../context/AppUserContext";
 import { useIsAdmin } from "../hooks/useIsAdmin";
@@ -24,6 +24,9 @@ export default function AppLayout() {
       <main className="max-w-7xl mx-auto px-6 sm:px-8 py-8">
         <Outlet />
       </main>
+      <footer className="text-center text-xs text-gray-400 py-6">
+        <Link to="/policies" className="hover:text-gray-600">Shipping, Returns & Policies</Link>
+      </footer>
     </div>
   );
 }

@@ -17,7 +17,7 @@ namespace ShoppingCart.API.Controllers
         }
 
         [HttpPost]
-        [AllowAnonymous] // guests can still ask policy questions
+        [AllowAnonymous]
         public async Task<IActionResult> SendMessage([FromBody] SendChatMessageDto dto)
         {
             if (string.IsNullOrWhiteSpace(dto.Message))
@@ -26,16 +26,14 @@ namespace ShoppingCart.API.Controllers
             if (dto.Message.Length > 1000)
                 return BadRequest("Message is too long.");
 
-            // If a valid JWT came with the request, resolve the local user id.
-            // No/invalid token -> null -> the service runs in policy-only mode.
             int? userId = User.Identity?.IsAuthenticated == true
                 ? await GetCurrentUserIdAsync()
                 : null;
 
-            var reply = await _chatService.GetReplyAsync(
+            var result = await _chatService.GetReplyAsync(
                 dto.Message, dto.History ?? new List<ChatMessageDto>(), userId);
 
-            return Ok(new ChatResponseDto(reply));
+            return Ok(new ChatResponseDto(result.Reply, result.Products));
         }
     }
 }

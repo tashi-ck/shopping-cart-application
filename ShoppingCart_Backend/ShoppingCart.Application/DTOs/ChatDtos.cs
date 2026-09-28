@@ -8,12 +8,18 @@ namespace ShoppingCart.Application.DTOs
 {
     public class ChatDtos
     {
-        // Role is "user" or "assistant" — mirrors the LLM provider's own message shape,
-        // so the frontend's stored history can be forwarded with no transformation.
         public record ChatMessageDto(string Role, string Content);
 
         public record SendChatMessageDto(string Message, List<ChatMessageDto>? History);
 
-        public record ChatResponseDto(string Reply);
+        // Slim product shape for chat cards
+        public record ChatProductDto(
+            int ProductId, string Name, string CategoryName,
+            decimal Price, int StockQuantity, string? ImageUrl);
+
+        // What the service returns internally: text + any products surfaced by tools
+        public record ChatReplyResult(string Reply, List<ChatProductDto> Products);
+
+        public record ChatResponseDto(string Reply, List<ChatProductDto> Products);
     }
 }

@@ -9,7 +9,7 @@ namespace ShoppingCart.Application.Interfaces
 {
     public interface IChatService
     {
-        // userId is null for anonymous visitors: they get policy answers only, no order tools.
-        Task<string> GetReplyAsync(string message, List<ChatMessageDto> history, int? userId = null);
+        // userId is null for anonymous visitors: policy + product tools only, no order tools.
+        Task<ChatReplyResult> GetReplyAsync(string message, List<ChatMessageDto> history, int? userId = null);
     }
 }

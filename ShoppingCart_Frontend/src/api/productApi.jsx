@@ -28,3 +28,14 @@ export const getProduct = (id) => axiosClient.get(`/products/${id}`);
 
 export const getPersonalizedProducts = (limit = 12) =>
   axiosClient.get("/products/for-you", { params: { limit } });
+
+export const getProductsPaged = (filters = {}) => {
+  const params = { page: filters.page ?? 1, pageSize: filters.pageSize ?? 12 };
+  if (filters.categoryId) params.categoryId = filters.categoryId;
+  if (filters.search) params.search = filters.search;
+  if (filters.sortBy) params.sortBy = filters.sortBy;
+  if (filters.minPrice !== undefined && filters.minPrice !== "") params.minPrice = filters.minPrice;
+  if (filters.maxPrice !== undefined && filters.maxPrice !== "") params.maxPrice = filters.maxPrice;
+  if (filters.inStockOnly) params.inStockOnly = true;
+  return axiosClient.get("/products/search", { params });
+};

@@ -1,14 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Search, X, SlidersHorizontal, LayoutGrid, List, PackageSearch,
   ChevronDown, ShoppingCart, ImageOff, Check, Loader2, Filter,
 } from "lucide-react";
-import { getProducts } from "../api/productApi";
+import { getProductsPaged } from "../api/productApi";
 import { getCategories } from "../api/categoryApi";
 import { useCart } from "../context/CartContext";
 import ProductCard from "../components/ProductCard";
+import Pagination from "../components/Pagination";
 import PersonalizedRecommendations from "../components/PersonalizedRecommendations";
+
+const PAGE_SIZE = 12;
 
 const SORT_OPTIONS = [
   { value: "", label: "Name (A–Z)" },
@@ -17,8 +20,7 @@ const SORT_OPTIONS = [
   { value: "newest", label: "Newest first" },
 ];
 
-// NOTE: this offset assumes the sticky Navbar is ~64px tall (h-16 equivalent).
-// If Navbar's height changes, update this value so the toolbar sits flush beneath it.
+// Assumes the sticky Navbar is ~64px tall. Update if the Navbar height changes.
 const TOOLBAR_STICKY_OFFSET = "top-16";
 
 function useDebouncedValue(value, delayMs) {
@@ -30,121 +32,154 @@ function useDebouncedValue(value, delayMs) {
   return debounced;
 }
 
+// Local input state that feels instant, pushed into the URL once typing settles.
+function useDebouncedUrlParam(urlValue, key, updateParams, delayMs) {
+  const [input, setInput] = useState(urlValue);
+  const debounced = useDebouncedValue(input, delayMs);
+
+  useEffect(() => {
+    setInput(urlValue);
+  }, [urlValue]);
+
+  useEffect(() => {
+    if (debounced === urlValue) return;
+    updateParams({ [key]: debounced || null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debounced]);
+
+  return [input, setInput];
+}
+
 export default function ProductsPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [products, setProducts] = useState([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [viewMode, setViewMode] = useState("grid"); // "grid" | "list"
-  const [sidebarOpen, setSidebarOpen] = useState(false); // mobile drawer
+  const [viewMode, setViewMode] = useState("grid");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const categoryId = searchParams.get("categoryId") ?? "";
   const sortBy = searchParams.get("sortBy") ?? "";
   const urlSearch = searchParams.get("search") ?? "";
-  const minPrice = searchParams.get("minPrice") ?? "";
-  const maxPrice = searchParams.get("maxPrice") ?? "";
+  const urlMinPrice = searchParams.get("minPrice") ?? "";
+  const urlMaxPrice = searchParams.get("maxPrice") ?? "";
   const inStockOnly = searchParams.get("inStock") === "1";
+  const page = Math.max(1, parseInt(searchParams.get("page") ?? "1", 10) || 1);
 
-  const [searchInput, setSearchInput] = useState(urlSearch);
-  const debouncedSearch = useDebouncedValue(searchInput, 350);
-
-  useEffect(() => {
-    setSearchInput(urlSearch);
-  }, [urlSearch]);
-
-  useEffect(() => {
-    if (debouncedSearch === urlSearch) return;
-    updateParams({ search: debouncedSearch || null });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch]);
-
+  // Any change other than the page itself sends the person back to page 1.
   function updateParams(patch) {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       Object.entries(patch).forEach(([key, value]) => {
-        if (value === null || value === "") {
-          next.delete(key);
-        } else {
-          next.set(key, value);
-        }
+        if (value === null || value === "") next.delete(key);
+        else next.set(key, value);
       });
+      if (!("page" in patch)) next.delete("page");
       return next;
     });
   }
+
+  const [searchInput, setSearchInput] = useDebouncedUrlParam(urlSearch, "search", updateParams, 350);
+  const [minInput, setMinInput] = useDebouncedUrlParam(urlMinPrice, "minPrice", updateParams, 500);
+  const [maxInput, setMaxInput] = useDebouncedUrlParam(urlMaxPrice, "maxPrice", updateParams, 500);
+
+  const goToPage = (nextPage) => {
+    updateParams({ page: nextPage > 1 ? String(nextPage) : null });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   useEffect(() => {
     getCategories().then((res) => setCategories(res.data));
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError("");
-    getProducts({ categoryId: categoryId || undefined, search: urlSearch || undefined, sortBy: sortBy || undefined })
-      .then((res) => setProducts(res.data))
-      .catch(() => setError("Couldn't load products. Please refresh."))
-      .finally(() => setLoading(false));
-  }, [categoryId, urlSearch, sortBy]);
+
+    getProductsPaged({
+      categoryId, search: urlSearch, sortBy,
+      minPrice: urlMinPrice, maxPrice: urlMaxPrice, inStockOnly,
+      page, pageSize: PAGE_SIZE,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setProducts(res.data.items);
+        setTotalCount(res.data.totalCount);
+        setTotalPages(res.data.totalPages);
+      })
+      .catch(() => {
+        if (!cancelled) setError("Couldn't load products. Please refresh.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [categoryId, urlSearch, sortBy, urlMinPrice, urlMaxPrice, inStockOnly, page]);
+
+  // If the URL points past the last page (edited link, or filters shrank the list), jump back.
+  useEffect(() => {
+    if (!loading && totalPages > 0 && page > totalPages) goToPage(totalPages);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, totalPages, page]);
 
   const selectedCategory = categories.find((c) => String(c.categoryId) === categoryId);
 
-  const visibleProducts = useMemo(() => {
-    const min = minPrice !== "" ? Number(minPrice) : null;
-    const max = maxPrice !== "" ? Number(maxPrice) : null;
-
-    return products.filter((p) => {
-      if (min !== null && p.price < min) return false;
-      if (max !== null && p.price > max) return false;
-      if (inStockOnly && p.stockQuantity <= 0) return false;
-      return true;
-    });
-  }, [products, minPrice, maxPrice, inStockOnly]);
-
-  const hasActiveFilters = categoryId || urlSearch || sortBy || minPrice || maxPrice || inStockOnly;
-  const activeFilterCount = [categoryId, minPrice, maxPrice, inStockOnly].filter(Boolean).length;
+  const hasActiveFilters = categoryId || urlSearch || sortBy || urlMinPrice || urlMaxPrice || inStockOnly;
+  const activeFilterCount = [categoryId, urlMinPrice, urlMaxPrice, inStockOnly].filter(Boolean).length;
 
   const clearFilters = () => {
     setSearchInput("");
+    setMinInput("");
+    setMaxInput("");
     setSearchParams({});
   };
 
   const removeFilter = (key) => updateParams({ [key]: null });
 
+  const sidebarProps = {
+    categories,
+    categoryId,
+    minPrice: minInput,
+    maxPrice: maxInput,
+    inStockOnly,
+    hasActiveFilters,
+    onSelectCategory: (id) => updateParams({ categoryId: id || null }),
+    onChangeMinPrice: setMinInput,
+    onChangeMaxPrice: setMaxInput,
+    onToggleInStock: (v) => updateParams({ inStock: v ? "1" : null }),
+    onClearAll: clearFilters,
+  };
+
   return (
-    // Negative margins cancel out AppLayout's "px-6 sm:px-8" so this page runs
-    // edge-to-edge instead of leaving a gap on either side.
     <div className="-mx-6 sm:-mx-8">
-      {/* Breadcrumb-style header — replaces the old "Products / N available" combo.
-          The live count now lives in the sticky toolbar below, where it's actually useful. */}
       <div className="px-6 sm:px-8 pb-4">
         <p className="text-xs text-gray-400 mb-1">Home / Products</p>
+        <h1 className="text-2xl font-semibold text-gray-900">All Products</h1>
       </div>
 
-      <div className="px-6 sm:px-8">
-        <PersonalizedRecommendations />
-      </div>
+      {/* Personalized picks only on the first, unfiltered page */}
+      {page === 1 && !hasActiveFilters && (
+        <div className="px-6 sm:px-8">
+          <PersonalizedRecommendations />
+        </div>
+      )}
 
       <div className="flex gap-6 items-start px-6 sm:px-8">
-        {/* ---------------- Left sidebar (desktop) ---------------- */}
+        {/* Left sidebar (desktop) */}
         <aside className="hidden lg:block w-64 shrink-0 sticky top-20 self-start">
-          <FilterSidebar
-            categories={categories}
-            categoryId={categoryId}
-            minPrice={minPrice}
-            maxPrice={maxPrice}
-            inStockOnly={inStockOnly}
-            hasActiveFilters={hasActiveFilters}
-            onSelectCategory={(id) => updateParams({ categoryId: id || null })}
-            onChangeMinPrice={(v) => updateParams({ minPrice: v || null })}
-            onChangeMaxPrice={(v) => updateParams({ maxPrice: v || null })}
-            onToggleInStock={(v) => updateParams({ inStock: v ? "1" : null })}
-            onClearAll={clearFilters}
-          />
+          <FilterSidebar {...sidebarProps} />
         </aside>
 
-        {/* ---------------- Mobile sidebar drawer ---------------- */}
+        {/* Mobile sidebar drawer */}
         {sidebarOpen && (
           <div className="fixed inset-0 z-40 lg:hidden">
             <div className="absolute inset-0 bg-black/40" onClick={() => setSidebarOpen(false)} />
@@ -156,35 +191,22 @@ export default function ProductsPage() {
                 </button>
               </div>
               <div className="p-4">
-                <FilterSidebar
-                  categories={categories}
-                  categoryId={categoryId}
-                  minPrice={minPrice}
-                  maxPrice={maxPrice}
-                  inStockOnly={inStockOnly}
-                  hasActiveFilters={hasActiveFilters}
-                  onSelectCategory={(id) => updateParams({ categoryId: id || null })}
-                  onChangeMinPrice={(v) => updateParams({ minPrice: v || null })}
-                  onChangeMaxPrice={(v) => updateParams({ maxPrice: v || null })}
-                  onToggleInStock={(v) => updateParams({ inStock: v ? "1" : null })}
-                  onClearAll={clearFilters}
-                />
+                <FilterSidebar {...sidebarProps} />
               </div>
               <div className="p-4 border-t border-gray-100">
                 <button
                   onClick={() => setSidebarOpen(false)}
                   className="w-full bg-indigo-600 text-white text-sm font-medium rounded-lg py-2.5 hover:bg-indigo-700 transition"
                 >
-                  Show {visibleProducts.length} results
+                  Show {totalCount} results
                 </button>
               </div>
             </div>
           </div>
         )}
 
-        {/* ---------------- Main content ---------------- */}
+        {/* Main content */}
         <div className="flex-1 min-w-0">
-          {/* Sticky search + toolbar — stays visible while scrolling the grid below it */}
           <div className={`sticky ${TOOLBAR_STICKY_OFFSET} z-20 -mx-6 sm:mx-0 px-6 sm:px-0 pb-4 bg-gray-50/95 backdrop-blur supports-[backdrop-filter]:bg-gray-50/85`}>
             <div className="bg-white rounded-2xl border border-gray-200 p-3 sm:p-4 shadow-sm">
               <div className="flex flex-wrap gap-3 items-center">
@@ -209,7 +231,6 @@ export default function ProductsPage() {
                   )}
                 </div>
 
-                {/* Mobile: open filter drawer */}
                 <button
                   type="button"
                   onClick={() => setSidebarOpen(true)}
@@ -261,11 +282,10 @@ export default function ProductsPage() {
                 </div>
               </div>
 
-              {/* Result count + active filter chips */}
               <div className="flex flex-wrap items-center gap-2 pt-3 mt-3 border-t border-gray-100">
                 {!loading && !error && (
                   <span className="text-xs font-medium text-gray-500 mr-1">
-                    {visibleProducts.length} {visibleProducts.length === 1 ? "result" : "results"}
+                    {totalCount} {totalCount === 1 ? "result" : "results"}
                   </span>
                 )}
                 {urlSearch && (
@@ -280,8 +300,8 @@ export default function ProductsPage() {
                     onRemove={() => removeFilter("sortBy")}
                   />
                 )}
-                {minPrice && <FilterChip label={`Min $${minPrice}`} onRemove={() => removeFilter("minPrice")} />}
-                {maxPrice && <FilterChip label={`Max $${maxPrice}`} onRemove={() => removeFilter("maxPrice")} />}
+                {urlMinPrice && <FilterChip label={`Min $${urlMinPrice}`} onRemove={() => { setMinInput(""); removeFilter("minPrice"); }} />}
+                {urlMaxPrice && <FilterChip label={`Max $${urlMaxPrice}`} onRemove={() => { setMaxInput(""); removeFilter("maxPrice"); }} />}
                 {inStockOnly && <FilterChip label="In stock only" onRemove={() => removeFilter("inStock")} />}
                 {hasActiveFilters && (
                   <button
@@ -299,7 +319,7 @@ export default function ProductsPage() {
           {/* Results */}
           <div className="pt-1">
             {loading && (
-              <div className={viewMode === "grid" ? "grid grid-cols-2 sm:grid-cols-3 gap-5" : "space-y-3"}>
+              <div className={viewMode === "grid" ? "grid grid-cols-2 sm:grid-cols-3 gap-5 pb-8" : "space-y-3 pb-8"}>
                 {Array.from({ length: viewMode === "grid" ? 6 : 5 }).map((_, i) =>
                   viewMode === "grid" ? (
                     <div key={i} className="bg-white rounded-2xl border border-gray-200 overflow-hidden animate-pulse">
@@ -330,8 +350,8 @@ export default function ProductsPage() {
               </div>
             )}
 
-            {!loading && !error && visibleProducts.length === 0 && (
-              <div className="bg-white rounded-2xl border border-gray-200 p-14 text-center">
+            {!loading && !error && products.length === 0 && totalCount === 0 && (
+              <div className="bg-white rounded-2xl border border-gray-200 p-14 text-center mb-8">
                 <PackageSearch className="mx-auto text-gray-300 mb-3" size={36} />
                 <p className="text-sm font-medium text-gray-700">No products match your filters</p>
                 <p className="text-sm text-gray-400 mt-1">Try adjusting your search or clearing filters.</p>
@@ -346,9 +366,9 @@ export default function ProductsPage() {
               </div>
             )}
 
-            {!loading && !error && visibleProducts.length > 0 && viewMode === "grid" && (
+            {!loading && !error && products.length > 0 && viewMode === "grid" && (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-5 pb-8">
-                {visibleProducts.map((product) => (
+                {products.map((product) => (
                   <ProductCard
                     key={product.productId}
                     product={product}
@@ -358,9 +378,9 @@ export default function ProductsPage() {
               </div>
             )}
 
-            {!loading && !error && visibleProducts.length > 0 && viewMode === "list" && (
+            {!loading && !error && products.length > 0 && viewMode === "list" && (
               <div className="space-y-3 pb-8">
-                {visibleProducts.map((product) => (
+                {products.map((product) => (
                   <ProductListRow
                     key={product.productId}
                     product={product}
@@ -368,6 +388,16 @@ export default function ProductsPage() {
                   />
                 ))}
               </div>
+            )}
+
+            {!loading && !error && (
+              <Pagination
+                page={page}
+                totalPages={totalPages}
+                totalCount={totalCount}
+                pageSize={PAGE_SIZE}
+                onChange={goToPage}
+              />
             )}
           </div>
         </div>
@@ -397,15 +427,10 @@ function FilterSidebar({
         )}
       </div>
 
-      {/* Category */}
       <div>
         <h3 className="text-xs font-semibold text-gray-900 uppercase tracking-wide mb-3">Category</h3>
         <div className="space-y-1">
-          <SidebarOption
-            label="All categories"
-            active={!categoryId}
-            onClick={() => onSelectCategory("")}
-          />
+          <SidebarOption label="All categories" active={!categoryId} onClick={() => onSelectCategory("")} />
           {categories.map((c) => (
             <SidebarOption
               key={c.categoryId}
@@ -417,7 +442,6 @@ function FilterSidebar({
         </div>
       </div>
 
-      {/* Price range */}
       <div>
         <h3 className="text-xs font-semibold text-gray-900 uppercase tracking-wide mb-3">Price range</h3>
         <div className="flex items-center gap-2">
@@ -449,7 +473,6 @@ function FilterSidebar({
         </div>
       </div>
 
-      {/* Availability */}
       <div>
         <h3 className="text-xs font-semibold text-gray-900 uppercase tracking-wide mb-3">Availability</h3>
         <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">

@@ -19,5 +19,8 @@ namespace ShoppingCart.Application.Interfaces
         Task<bool> DeleteProductImageAsync(int productId, int productImageId);
         Task ReorderProductImagesAsync(int productId, ReorderProductImagesDto dto);
         Task<IEnumerable<ProductDto>> GetPersonalizedProductsAsync(int userId, int limit = 12);
+        Task<PagedProductsDto> GetProductsPagedAsync(
+            int? categoryId, string? search, string? sortBy, decimal? minPrice, decimal? maxPrice,
+            bool inStockOnly, bool includeInactive, int page, int pageSize);
     }
 }

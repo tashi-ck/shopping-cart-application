@@ -15,5 +15,8 @@ namespace ShoppingCart.Application.Interfaces
         Task<bool> UpdateAsync(Product product);
         Task<bool> DeleteAsync(int productId);
         Task<bool> SetActiveAsync(int productId, bool isActive);
+        Task<(IEnumerable<ProductWithCategory> Items, int TotalCount)> GetPagedAsync(
+           int? categoryId, string? search, string? sortBy, decimal? minPrice, decimal? maxPrice,
+           bool inStockOnly, bool includeInactive, int page, int pageSize);
     }
 }

@@ -1,8 +1,9 @@
-import { Outlet, Navigate, useLocation, Link } from "react-router-dom";
+import { Outlet, Navigate, useLocation } from "react-router-dom";
 import { useAuth0 } from "@auth0/auth0-react";
 import { useAppUser } from "../context/AppUserContext";
 import { useIsAdmin } from "../hooks/useIsAdmin";
 import Navbar from "./Navbar";
+import Footer from "./Footer";
 
 export default function AppLayout() {
   const { isAuthenticated } = useAuth0();
@@ -10,7 +11,6 @@ export default function AppLayout() {
   const { isAdmin, isLoading: adminLoading } = useIsAdmin();
   const location = useLocation();
 
-  // Admins skip the shopping-preferences wizard — it isn't relevant to them.
   const needsOnboarding =
     isReady && isAuthenticated && appUser && !appUser.hasCompletedOnboarding && !adminLoading && !isAdmin;
 
@@ -19,14 +19,12 @@ export default function AppLayout() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 flex flex-col">
       <Navbar />
-      <main className="max-w-7xl mx-auto px-6 sm:px-8 py-8">
+      <main className="flex-1 w-full max-w-7xl mx-auto px-6 sm:px-8 py-8">
         <Outlet />
       </main>
-      <footer className="text-center text-xs text-gray-400 py-6">
-        <Link to="/policies" className="hover:text-gray-600">Shipping, Returns & Policies</Link>
-      </footer>
+      <Footer />
     </div>
   );
 }

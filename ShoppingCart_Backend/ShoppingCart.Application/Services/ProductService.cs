@@ -167,6 +167,24 @@ namespace ShoppingCart.Application.Services
             return scored.Select(p => MapToDto(p, new List<ProductImageDto>()));
         }
 
+        public async Task<PagedProductsDto> GetProductsPagedAsync(
+           int? categoryId, string? search, string? sortBy, decimal? minPrice, decimal? maxPrice,
+           bool inStockOnly, bool includeInactive, int page, int pageSize)
+        {
+            // Clamp untrusted input: never allow page 0 or a huge page size.
+            page = Math.Max(1, page);
+            pageSize = Math.Clamp(pageSize, 1, 48);
+
+            var (items, totalCount) = await _productRepository.GetPagedAsync(
+                categoryId, search, sortBy, minPrice, maxPrice, inStockOnly, includeInactive, page, pageSize);
+
+            var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+
+            return new PagedProductsDto(
+                items.Select(p => MapToDto(p, new List<ProductImageDto>())).ToList(),
+                totalCount, page, pageSize, totalPages);
+        }
+
         private static ProductDto MapToDto(ProductWithCategory p, List<ProductImageDto> images) => new(
             p.ProductId, p.CategoryId, p.CategoryName, p.Name, p.Description,
             p.Price, p.StockQuantity, p.ImageUrl, p.IsActive, p.CreatedAt, p.UpdatedAt,

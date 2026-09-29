@@ -48,5 +48,13 @@ namespace ShoppingCart.Application.DTOs
         public record AddProductImageDto(string ImageUrl);
 
         public record ReorderProductImagesDto(List<int> ProductImageIds); // list order = new DisplayOrder
+
+        public record PagedProductsDto(
+            List<ProductDto> Items,
+            int TotalCount,
+            int Page,
+            int PageSize,
+            int TotalPages
+        );
     }
 }

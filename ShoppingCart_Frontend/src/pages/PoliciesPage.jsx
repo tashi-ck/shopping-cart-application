@@ -1,20 +1,25 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ScrollText } from "lucide-react";
 import { getPolicies } from "../api/policyApi";
+import { useLocation } from "react-router-dom";
 
 export default function PoliciesPage() {
   const [policies, setPolicies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [openSlug, setOpenSlug] = useState(null);
 
-  useEffect(() => {
-    getPolicies()
-      .then((res) => {
-        setPolicies(res.data);
-        if (res.data.length > 0) setOpenSlug(res.data[0].slug);
-      })
-      .finally(() => setLoading(false));
-  }, []);
+ const location = useLocation();
+
+useEffect(() => {
+  getPolicies()
+    .then((res) => {
+      setPolicies(res.data);
+      const hash = location.hash.replace("#", "");
+      const match = res.data.find((p) => p.slug === hash);
+      setOpenSlug(match ? match.slug : res.data[0]?.slug ?? null);
+    })
+    .finally(() => setLoading(false));
+}, [location.hash]);
 
   if (loading) return <p className="text-sm text-gray-500">Loading policies...</p>;
 

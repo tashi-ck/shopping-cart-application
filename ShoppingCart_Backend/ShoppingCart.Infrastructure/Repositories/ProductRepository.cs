@@ -111,5 +111,73 @@ namespace ShoppingCart.Infrastructure.Repositories
             var rowsAffected = await connection.ExecuteAsync(sql, new { ProductId = productId, IsActive = isActive });
             return rowsAffected > 0;
         }
+
+        public async Task<(IEnumerable<ProductWithCategory> Items, int TotalCount)> GetPagedAsync(
+            int? categoryId, string? search, string? sortBy, decimal? minPrice, decimal? maxPrice,
+            bool inStockOnly, bool includeInactive, int page, int pageSize)
+        {
+            using var connection = _connectionFactory.CreateConnection();
+
+            var where = " WHERE 1 = 1";
+            var parameters = new DynamicParameters();
+
+            if (!includeInactive)
+                where += """ AND p."IsActive" = TRUE""";
+
+            if (categoryId.HasValue)
+            {
+                where += """ AND p."CategoryId" = @CategoryId""";
+                parameters.Add("CategoryId", categoryId.Value);
+            }
+
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                where += """ AND p."Name" ILIKE @Search""";
+                parameters.Add("Search", $"%{search}%");
+            }
+
+            if (minPrice.HasValue)
+            {
+                where += """ AND p."Price" >= @MinPrice""";
+                parameters.Add("MinPrice", minPrice.Value);
+            }
+
+            if (maxPrice.HasValue)
+            {
+                where += """ AND p."Price" <= @MaxPrice""";
+                parameters.Add("MaxPrice", maxPrice.Value);
+            }
+
+            if (inStockOnly)
+                where += """ AND p."StockQuantity" > 0""";
+
+            const string fromClause = """ FROM "Products" p JOIN "Categories" c ON c."CategoryId" = p."CategoryId" """;
+
+            var totalCount = await connection.QuerySingleAsync<int>(
+                "SELECT COUNT(*)" + fromClause + where, parameters);
+
+            // ProductId is a tiebreaker so rows never shuffle between pages
+            // when several products share the same price/name/date.
+            var orderBy = sortBy switch
+            {
+                "price_asc" => """ ORDER BY p."Price" ASC, p."ProductId" ASC""",
+                "price_desc" => """ ORDER BY p."Price" DESC, p."ProductId" ASC""",
+                "newest" => """ ORDER BY p."CreatedAt" DESC, p."ProductId" ASC""",
+                _ => """ ORDER BY p."Name" ASC, p."ProductId" ASC"""
+            };
+
+            parameters.Add("Limit", pageSize);
+            parameters.Add("Offset", (page - 1) * pageSize);
+
+            const string selectClause = """
+                SELECT p."ProductId", p."CategoryId", c."Name" AS "CategoryName", p."Name", p."Description",
+                       p."Price", p."StockQuantity", p."ImageUrl", p."IsActive", p."CreatedAt", p."UpdatedAt"
+                """;
+
+            var items = await connection.QueryAsync<ProductWithCategory>(
+                selectClause + fromClause + where + orderBy + " LIMIT @Limit OFFSET @Offset", parameters);
+
+            return (items, totalCount);
+        }
     }
 }

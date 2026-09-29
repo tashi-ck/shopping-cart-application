@@ -29,6 +29,22 @@ namespace ShoppingCart.API.Controllers
             return Ok(products);
         }
 
+        [HttpGet("search")]
+        [AllowAnonymous]
+        public async Task<IActionResult> SearchProducts(
+            [FromQuery] int? categoryId, [FromQuery] string? search, [FromQuery] string? sortBy,
+            [FromQuery] decimal? minPrice, [FromQuery] decimal? maxPrice,
+            [FromQuery] bool inStockOnly = false, [FromQuery] bool includeInactive = false,
+            [FromQuery] int page = 1, [FromQuery] int pageSize = 12)
+        {
+            var effectiveIncludeInactive = includeInactive && User.IsInRole("Admin");
+
+            var result = await _productService.GetProductsPagedAsync(
+                categoryId, search, sortBy, minPrice, maxPrice, inStockOnly, effectiveIncludeInactive, page, pageSize);
+
+            return Ok(result);
+        }
+
         [HttpGet("{id}")]
         [AllowAnonymous]
         public async Task<IActionResult> GetProduct(int id)

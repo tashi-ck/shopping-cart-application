@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using ShoppingCart.Application.Interfaces;
 using static ShoppingCart.Application.DTOs.ChatDtos;
 
@@ -18,6 +19,7 @@ namespace ShoppingCart.API.Controllers
 
         [HttpPost]
         [AllowAnonymous]
+        [EnableRateLimiting("chat")]
         public async Task<IActionResult> SendMessage([FromBody] SendChatMessageDto dto)
         {
             if (string.IsNullOrWhiteSpace(dto.Message))

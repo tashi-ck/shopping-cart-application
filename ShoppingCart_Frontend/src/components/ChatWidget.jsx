@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth0 } from "@auth0/auth0-react";
-import { MessageCircle, X, Send, Loader2, Bot, ImageOff, ShoppingCart, Check } from "lucide-react";
+import { MessageCircle, X, Send, Loader2, Bot, ImageOff, ShoppingCart, Check, RotateCcw } from "lucide-react";
 import { sendChatMessage } from "../api/chatApi";
 import { useCart } from "../context/CartContext";
 
@@ -18,6 +18,29 @@ const USER_GREETING = {
 const GUEST_SUGGESTIONS = ["Show me headphones under $100", "What's your return policy?", "Recommend something for working out"];
 const USER_SUGGESTIONS = ["Where is my latest order?", "Show me office gear", "What's your return policy?"];
 
+// sessionStorage (not localStorage): survives a refresh or back/forward within
+// this tab, but clears when the tab closes — so history doesn't grow forever
+// or bleed into a completely separate later visit.
+const STORAGE_KEY = "chatWidgetHistory";
+
+function loadStoredChat() {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredChat(data) {
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch {
+    // Storage can fail (private browsing, quota) — losing persistence
+    // silently is fine, the chat still works for the rest of this session.
+  }
+}
+
 function ChatProductCard({ product, onOpen }) {
   const { addItem } = useCart();
   const outOfStock = product.stockQuantity === 0;
@@ -25,8 +48,6 @@ function ChatProductCard({ product, onOpen }) {
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState(false);
 
-  // A real click, handled entirely on the client via the same CartContext every
-  // other "add to cart" button uses — the chatbot itself never calls this.
   const handleAddToCart = async (e) => {
     e.stopPropagation();
     if (outOfStock || adding) return;
@@ -94,19 +115,48 @@ function ChatProductCard({ product, onOpen }) {
 
 export default function ChatWidget() {
   const navigate = useNavigate();
-  const { isAuthenticated } = useAuth0();
-  const greeting = isAuthenticated ? USER_GREETING : GUEST_GREETING;
-  const suggestions = isAuthenticated ? USER_SUGGESTIONS : GUEST_SUGGESTIONS;
+  const { isAuthenticated, isLoading: authLoading } = useAuth0();
 
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState([greeting]);
+  // Lazy initial state: try to show *something* sane immediately (avoids a
+  // flash of the wrong greeting) — the effect below reconciles it against
+  // Auth0's real state and sessionStorage once auth has resolved.
+  const [messages, setMessages] = useState(() => {
+    const stored = loadStoredChat();
+    return stored?.messages?.length ? stored.messages : [GUEST_GREETING];
+  });
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const scrollRef = useRef(null);
+  const hydratedRef = useRef(false);
 
+  const greeting = isAuthenticated ? USER_GREETING : GUEST_GREETING;
+  const suggestions = isAuthenticated ? USER_SUGGESTIONS : GUEST_SUGGESTIONS;
+
+  // Runs once Auth0 knows the real login state (true on first load after a
+  // refresh, and again whenever login/logout actually happens). Restores the
+  // saved conversation only if it was saved under the SAME auth state —
+  // otherwise starts fresh, same as the old "reset on auth change" behavior.
   useEffect(() => {
-    setMessages([isAuthenticated ? USER_GREETING : GUEST_GREETING]);
-  }, [isAuthenticated]);
+    if (authLoading) return;
+
+    const stored = loadStoredChat();
+    if (stored && stored.isAuthenticated === isAuthenticated && stored.messages?.length) {
+      setMessages(stored.messages);
+    } else {
+      setMessages([greeting]);
+    }
+    hydratedRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoading, isAuthenticated]);
+
+  // Persist after every change, but only once hydration above has run —
+  // otherwise the lazy initial state would immediately overwrite storage
+  // before we've had a chance to read and reconcile it.
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    saveStoredChat({ isAuthenticated, messages });
+  }, [messages, isAuthenticated]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -117,6 +167,10 @@ export default function ChatWidget() {
   const openProduct = (productId) => {
     setOpen(false);
     navigate(`/products/${productId}`);
+  };
+
+  const handleClearChat = () => {
+    setMessages([greeting]);
   };
 
   const send = async (text) => {
@@ -136,8 +190,6 @@ export default function ChatWidget() {
         { role: "assistant", content: res.data.reply, products: res.data.products ?? [] },
       ]);
     } catch (err) {
-      // A 429 from the rate limiter arrives as plain text — show it verbatim so
-      // the person understands they're being throttled, not that something broke.
       const message =
         err.response?.status === 429
           ? err.response?.data || "You're sending messages too quickly. Please wait a moment and try again."
@@ -163,14 +215,27 @@ export default function ChatWidget() {
             <span className="flex items-center gap-2 text-sm font-semibold">
               <Bot size={16} /> Shopping Assistant
             </span>
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              className="text-white/80 hover:text-white"
-              aria-label="Close chat"
-            >
-              <X size={18} />
-            </button>
+            <div className="flex items-center gap-1">
+              {messages.length > 1 && (
+                <button
+                  type="button"
+                  onClick={handleClearChat}
+                  className="text-white/80 hover:text-white p-1"
+                  title="Clear chat"
+                  aria-label="Clear chat"
+                >
+                  <RotateCcw size={15} />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="text-white/80 hover:text-white p-1"
+                aria-label="Close chat"
+              >
+                <X size={18} />
+              </button>
+            </div>
           </div>
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-gray-50">

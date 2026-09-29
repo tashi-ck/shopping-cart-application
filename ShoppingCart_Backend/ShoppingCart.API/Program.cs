@@ -5,6 +5,8 @@ using ShoppingCart.Infrastructure.Persistence;
 using ShoppingCart.Infrastructure.Repositories;
 using ShoppingCart.Infrastructure.Services;
 using Stripe;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Threading.RateLimiting;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -83,6 +85,38 @@ builder.Services.AddHttpClient<IChatService, AiChatService>(client =>
             "Bearer", builder.Configuration["Chatbot:ApiKey"]);
 });
 
+// Chat hits an external LLM per call, so it gets its own limiter rather than
+// relying on any global one — 15 messages/minute is generous for a real
+// conversation but stops a script from looping the endpoint for free.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    options.OnRejected = async (context, token) =>
+    {
+        context.HttpContext.Response.ContentType = "text/plain";
+        await context.HttpContext.Response.WriteAsync(
+            "You're sending messages too quickly. Please wait a moment and try again.", token);
+    };
+
+    options.AddPolicy("chat", httpContext =>
+    {
+        // Logged-in users are keyed by their Auth0 subject; guests fall back to IP.
+        // Either way, everyone gets their own bucket instead of sharing one global limit.
+        var key = httpContext.User.Identity?.IsAuthenticated == true
+            ? httpContext.User.FindFirst("sub")?.Value
+            : null;
+        key ??= httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+        return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 15,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+        });
+    });
+});
+
 // Add services to the container.
 
 builder.Services.AddControllers();
@@ -116,6 +150,7 @@ app.Use(async (context, next) =>
     }
 });
 app.UseAuthentication();
+app.UseRateLimiter();
 app.UseAuthorization();
 
 app.MapControllers();

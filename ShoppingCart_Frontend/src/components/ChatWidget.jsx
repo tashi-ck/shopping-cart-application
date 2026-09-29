@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth0 } from "@auth0/auth0-react";
-import { MessageCircle, X, Send, Loader2, Bot, ImageOff } from "lucide-react";
+import { MessageCircle, X, Send, Loader2, Bot, ImageOff, ShoppingCart, Check } from "lucide-react";
 import { sendChatMessage } from "../api/chatApi";
+import { useCart } from "../context/CartContext";
 
 const GUEST_GREETING = {
   role: "assistant",
@@ -18,34 +19,76 @@ const GUEST_SUGGESTIONS = ["Show me headphones under $100", "What's your return 
 const USER_SUGGESTIONS = ["Where is my latest order?", "Show me office gear", "What's your return policy?"];
 
 function ChatProductCard({ product, onOpen }) {
+  const { addItem } = useCart();
   const outOfStock = product.stockQuantity === 0;
 
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState(false);
+
+  // A real click, handled entirely on the client via the same CartContext every
+  // other "add to cart" button uses — the chatbot itself never calls this.
+  const handleAddToCart = async (e) => {
+    e.stopPropagation();
+    if (outOfStock || adding) return;
+    setAdding(true);
+    const result = await addItem(product, 1);
+    setAdding(false);
+    if (result.success) {
+      setAdded(true);
+      setTimeout(() => setAdded(false), 1500);
+    }
+  };
+
   return (
-    <button
-      type="button"
-      onClick={() => onOpen(product.productId)}
-      className="w-full flex items-center gap-3 text-left bg-white border border-gray-200 rounded-xl p-2 hover:border-indigo-300 hover:shadow-sm transition"
-    >
-      <div className="w-12 h-12 rounded-lg bg-gray-50 border border-gray-100 overflow-hidden shrink-0 flex items-center justify-center">
-        {product.imageUrl ? (
-          <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover" />
+    <div className="w-full flex items-center gap-3 bg-white border border-gray-200 rounded-xl p-2 hover:border-indigo-300 hover:shadow-sm transition">
+      <button
+        type="button"
+        onClick={() => onOpen(product.productId)}
+        className="flex items-center gap-3 flex-1 min-w-0 text-left"
+      >
+        <div className="w-12 h-12 rounded-lg bg-gray-50 border border-gray-100 overflow-hidden shrink-0 flex items-center justify-center">
+          {product.imageUrl ? (
+            <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover" />
+          ) : (
+            <ImageOff size={16} className="text-gray-300" />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-medium text-gray-900 truncate">{product.name}</p>
+          <p className="text-[11px] text-gray-400 truncate">{product.categoryName}</p>
+          <p className="text-xs font-semibold text-gray-900 mt-0.5">${Number(product.price).toFixed(2)}</p>
+        </div>
+      </button>
+
+      <div className="flex flex-col items-end gap-1 shrink-0">
+        {outOfStock ? (
+          <span className="text-[10px] font-medium text-red-600">Out of stock</span>
         ) : (
-          <ImageOff size={16} className="text-gray-300" />
+          <>
+            {product.stockQuantity < 5 && (
+              <span className="text-[10px] font-medium text-amber-600">{product.stockQuantity} left</span>
+            )}
+            <button
+              type="button"
+              onClick={handleAddToCart}
+              disabled={adding}
+              title="Add to cart"
+              className={`flex items-center justify-center w-7 h-7 rounded-full transition ${
+                added ? "bg-green-600" : "bg-indigo-600 hover:bg-indigo-700"
+              } text-white disabled:opacity-70`}
+            >
+              {adding ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : added ? (
+                <Check size={12} />
+              ) : (
+                <ShoppingCart size={12} />
+              )}
+            </button>
+          </>
         )}
       </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-xs font-medium text-gray-900 truncate">{product.name}</p>
-        <p className="text-[11px] text-gray-400 truncate">{product.categoryName}</p>
-      </div>
-      <div className="text-right shrink-0">
-        <p className="text-xs font-semibold text-gray-900">${Number(product.price).toFixed(2)}</p>
-        {outOfStock ? (
-          <p className="text-[10px] font-medium text-red-600">Out of stock</p>
-        ) : product.stockQuantity < 5 ? (
-          <p className="text-[10px] font-medium text-amber-600">{product.stockQuantity} left</p>
-        ) : null}
-      </div>
-    </button>
+    </div>
   );
 }
 
@@ -80,7 +123,6 @@ export default function ChatWidget() {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
 
-    // Only role + content go back to the server; product cards are display-only.
     const priorHistory = messages.slice(1).map((m) => ({ role: m.role, content: m.content }));
 
     setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
@@ -93,11 +135,14 @@ export default function ChatWidget() {
         ...prev,
         { role: "assistant", content: res.data.reply, products: res.data.products ?? [] },
       ]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: "Sorry, something went wrong. Please try again in a moment." },
-      ]);
+    } catch (err) {
+      // A 429 from the rate limiter arrives as plain text — show it verbatim so
+      // the person understands they're being throttled, not that something broke.
+      const message =
+        err.response?.status === 429
+          ? err.response?.data || "You're sending messages too quickly. Please wait a moment and try again."
+          : "Sorry, something went wrong. Please try again in a moment.";
+      setMessages((prev) => [...prev, { role: "assistant", content: message }]);
     } finally {
       setSending(false);
     }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth0 } from "@auth0/auth0-react";
+import ReactMarkdown from "react-markdown";
 import { MessageCircle, X, Send, Loader2, Bot, ImageOff, ShoppingCart, Check, RotateCcw } from "lucide-react";
 import { useCart } from "../context/CartContext";
 
@@ -34,6 +35,48 @@ function saveStoredChat(data) {
   } catch {
     // Storage can fail (private browsing, quota) — losing persistence silently is fine.
   }
+}
+
+// Markdown elements render with browser-default spacing/bullets by default,
+// which looks oversized inside a small chat bubble — these overrides tighten
+// them to match the bubble's existing text-sm / leading-relaxed styling.
+const markdownComponents = {
+  p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  ul: ({ children }) => <ul className="list-disc pl-4 mb-2 last:mb-0 space-y-0.5">{children}</ul>,
+  ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 last:mb-0 space-y-0.5">{children}</ol>,
+  li: ({ children }) => <li>{children}</li>,
+  a: ({ href, children }) => (
+    <a href={href} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:opacity-80">
+      {children}
+    </a>
+  ),
+  code: ({ children }) => (
+    <code className="bg-black/5 rounded px-1 py-0.5 text-[0.85em] font-mono">{children}</code>
+  ),
+  // The LLM's own instructions are plain text, not markdown, so heading syntax
+  // in a reply ("# Shipping") should still read as inline emphasis, not a giant
+  // heading that blows out the chat bubble's layout.
+  h1: ({ children }) => <p className="font-semibold mb-2 last:mb-0">{children}</p>,
+  h2: ({ children }) => <p className="font-semibold mb-2 last:mb-0">{children}</p>,
+  h3: ({ children }) => <p className="font-semibold mb-2 last:mb-0">{children}</p>,
+};
+
+// Renders assistant replies as markdown once finished; shows raw text for the
+// user's own messages (never interpret their input as formatting) and for an
+// assistant message still mid-stream (partial markdown syntax like an unclosed
+// "**" would otherwise flicker/misrender while tokens are still arriving).
+function ChatMessageContent({ message, isStreaming }) {
+  if (message.role === "user" || isStreaming) {
+    return <span className="whitespace-pre-line">{message.content}</span>;
+  }
+
+  return (
+    <div className="prose-chat">
+      <ReactMarkdown components={markdownComponents}>{message.content}</ReactMarkdown>
+    </div>
+  );
 }
 
 function ChatProductCard({ product, onOpen }) {
@@ -157,7 +200,6 @@ export default function ChatWidget() {
     setMessages([greeting]);
   };
 
-  // Mutates the LAST message in the list (the in-progress assistant reply).
   const updateLastAssistantMessage = (updater) => {
     setMessages((prev) => {
       const next = [...prev];
@@ -203,7 +245,6 @@ export default function ChatWidget() {
     setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
     setInput("");
     setSending(true);
-    // Placeholder assistant bubble that streamed chunks get appended into.
     setMessages((prev) => [...prev, { role: "assistant", content: "", products: [] }]);
 
     try {
@@ -295,22 +336,23 @@ export default function ChatWidget() {
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-gray-50">
             {messages.map((m, i) => {
-              const isStreamingPlaceholder =
-                m.role === "assistant" && m.content === "" && sending && i === messages.length - 1;
+              const isLast = i === messages.length - 1;
+              const isStreaming = m.role === "assistant" && sending && isLast;
+              const isEmptyPlaceholder = isStreaming && m.content === "";
 
               return (
                 <div key={i} className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}>
                   <div
-                    className={`max-w-[85%] text-sm rounded-2xl px-3.5 py-2 leading-relaxed whitespace-pre-line ${
+                    className={`max-w-[85%] text-sm rounded-2xl px-3.5 py-2 leading-relaxed ${
                       m.role === "user"
                         ? "bg-indigo-600 text-white rounded-br-sm"
                         : "bg-white border border-gray-200 text-gray-700 rounded-bl-sm"
                     }`}
                   >
-                    {isStreamingPlaceholder ? (
+                    {isEmptyPlaceholder ? (
                       <Loader2 size={14} className="animate-spin text-gray-400" />
                     ) : (
-                      m.content
+                      <ChatMessageContent message={m} isStreaming={isStreaming} />
                     )}
                   </div>
 

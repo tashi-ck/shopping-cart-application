@@ -3,6 +3,7 @@ import { LayoutDashboard, Package, FolderTree, ArrowLeft } from "lucide-react";
 import { ClipboardList, ScrollText  } from "lucide-react";
 import { Users } from "lucide-react";
 import { MessageSquare } from "lucide-react";
+import { Bot } from "lucide-react";
 
 export default function AdminLayout() {
   const linkClass = ({ isActive }) =>
@@ -34,6 +35,9 @@ export default function AdminLayout() {
         </NavLink>
         <NavLink to="/admin/policies" className={linkClass}>
             <ScrollText size={16} /> Policies
+        </NavLink>
+         <NavLink to="/admin/chat-logs" className={linkClass}>
+            <Bot size={16} /> Chat Logs
         </NavLink>
 
         <NavLink to="/" className="flex items-center gap-2 px-3 py-2 mt-6 text-sm text-gray-500 hover:text-gray-900 transition">

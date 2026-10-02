@@ -1,9 +1,12 @@
 ﻿using Microsoft.Extensions.Configuration;
 using ShoppingCart.Application.Interfaces;
+using ShoppingCart.Application.Models;
+using ShoppingCart.Core.Entities;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -14,11 +17,13 @@ namespace ShoppingCart.Infrastructure.Services
     public class AiChatService : IChatService
     {
         private readonly HttpClient _httpClient;
-        private readonly IPolicyRepository _policyRepository;
+        private readonly IPolicyService _policyService;
         private readonly IOrderService _orderService;
         private readonly IProductService _productService;
         private readonly ICategoryService _categoryService;
         private readonly IRecommendationService _recommendationService;
+        private readonly IReviewService _reviewService;
+        private readonly IChatLogRepository _chatLogRepository;
         private readonly string _model;
 
         private const int MaxHistoryMessages = 10;
@@ -28,25 +33,30 @@ namespace ShoppingCart.Infrastructure.Services
 
         public AiChatService(
             HttpClient httpClient,
-            IPolicyRepository policyRepository,
+            IPolicyService policyService,
             IOrderService orderService,
             IProductService productService,
             ICategoryService categoryService,
             IRecommendationService recommendationService,
+            IReviewService reviewService,
+            IChatLogRepository chatLogRepository,
             IConfiguration configuration)
         {
             _httpClient = httpClient;
-            _policyRepository = policyRepository;
+            _policyService = policyService;
             _orderService = orderService;
             _productService = productService;
             _categoryService = categoryService;
             _recommendationService = recommendationService;
+            _reviewService = reviewService;
+            _chatLogRepository = chatLogRepository;
             _model = configuration["Chatbot:Model"] ?? "gpt-4o-mini";
         }
 
+        // ==================== Non-streaming ====================
+
         public async Task<ChatReplyResult> GetReplyAsync(string message, List<ChatMessageDto> history, int? userId = null)
         {
-            // Products surfaced by tools during THIS reply — shown as cards in the widget.
             var surfacedProducts = new List<ChatProductDto>();
 
             try
@@ -55,12 +65,8 @@ namespace ShoppingCart.Infrastructure.Services
                 var systemPrompt = await BuildSystemPromptAsync(isLoggedIn);
 
                 var messages = new List<object> { new { role = "system", content = systemPrompt } };
-
                 foreach (var turn in history.TakeLast(MaxHistoryMessages))
-                {
                     messages.Add(new { role = turn.Role == "assistant" ? "assistant" : "user", content = turn.Content });
-                }
-
                 messages.Add(new { role = "user", content = message });
 
                 var tools = BuildToolDefinitions(isLoggedIn);
@@ -93,9 +99,10 @@ namespace ShoppingCart.Infrastructure.Services
                             ? c.GetString()
                             : null;
 
-                        return new ChatReplyResult(
-                            string.IsNullOrWhiteSpace(reply) ? FallbackText() : reply.Trim(),
-                            surfacedProducts.Take(MaxCardsPerReply).ToList());
+                        var finalReply = string.IsNullOrWhiteSpace(reply) ? FallbackText() : reply.Trim();
+                        await LogChatAsync(userId, message, finalReply);
+
+                        return new ChatReplyResult(finalReply, surfacedProducts.Take(MaxCardsPerReply).ToList());
                     }
 
                     string? assistantText = assistantMessage.TryGetProperty("content", out var ac) && ac.ValueKind == JsonValueKind.String
@@ -111,23 +118,161 @@ namespace ShoppingCart.Infrastructure.Services
                         var name = fn.GetProperty("name").GetString() ?? "";
                         var argsJson = fn.GetProperty("arguments").GetString() ?? "{}";
 
-                        // userId comes from the server-side identity, never from the model.
                         var result = await ExecuteToolAsync(name, argsJson, userId, surfacedProducts);
-
                         messages.Add(new { role = "tool", tool_call_id = callId, content = result });
                     }
                 }
 
-                return new ChatReplyResult(FallbackText(), new List<ChatProductDto>());
+                var fallback = FallbackText();
+                await LogChatAsync(userId, message, fallback);
+                return new ChatReplyResult(fallback, new List<ChatProductDto>());
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Chatbot request failed, returning fallback reply: {ex.Message}");
-                return new ChatReplyResult(FallbackText(), new List<ChatProductDto>());
+                var fallback = FallbackText();
+                await LogChatAsync(userId, message, fallback);
+                return new ChatReplyResult(fallback, new List<ChatProductDto>());
             }
         }
 
-        // ---------------- Tool definitions ----------------
+        // ==================== Streaming ====================
+
+        public async IAsyncEnumerable<ChatStreamEvent> StreamReplyAsync(
+            string message, List<ChatMessageDto> history, int? userId,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var isLoggedIn = userId.HasValue;
+            var systemPrompt = await BuildSystemPromptAsync(isLoggedIn);
+
+            var messages = new List<object> { new { role = "system", content = systemPrompt } };
+            foreach (var turn in history.TakeLast(MaxHistoryMessages))
+                messages.Add(new { role = turn.Role == "assistant" ? "assistant" : "user", content = turn.Content });
+            messages.Add(new { role = "user", content = message });
+
+            var tools = BuildToolDefinitions(isLoggedIn);
+            var surfacedProducts = new List<ChatProductDto>();
+
+            // Note: this method intentionally has no surrounding try/catch — C# iterators
+            // can't yield inside a try block that has a catch clause. Exceptions bubble up
+            // to the controller, which wraps the `await foreach` instead.
+            for (var round = 0; round < MaxToolRounds; round++)
+            {
+                var payload = new Dictionary<string, object>
+                {
+                    ["model"] = _model,
+                    ["temperature"] = 0.3,
+                    ["messages"] = messages,
+                    ["tools"] = tools,
+                    ["tool_choice"] = "auto",
+                    ["stream"] = true
+                };
+
+                using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/chat/completions")
+                {
+                    Content = JsonContent.Create(payload)
+                };
+
+                using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                response.EnsureSuccessStatusCode();
+
+                await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                using var reader = new StreamReader(stream);
+
+                var contentBuilder = new StringBuilder();
+                var toolCallBuilders = new Dictionary<int, (string? Id, string? Name, StringBuilder Args)>();
+                string? finishReason = null;
+
+                while (!reader.EndOfStream)
+                {
+                    var line = await reader.ReadLineAsync(cancellationToken);
+                    if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data: ")) continue;
+
+                    var dataLine = line["data: ".Length..];
+                    if (dataLine == "[DONE]") break;
+
+                    using var doc = JsonDocument.Parse(dataLine);
+                    var choice = doc.RootElement.GetProperty("choices")[0];
+
+                    if (choice.TryGetProperty("finish_reason", out var fr) && fr.ValueKind == JsonValueKind.String)
+                        finishReason = fr.GetString();
+
+                    var delta = choice.GetProperty("delta");
+
+                    if (delta.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String)
+                    {
+                        var text = c.GetString()!;
+                        contentBuilder.Append(text);
+                        yield return new ChatTextChunkEvent(text);
+                    }
+
+                    if (delta.TryGetProperty("tool_calls", out var tcs) && tcs.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var tc in tcs.EnumerateArray())
+                        {
+                            var index = tc.GetProperty("index").GetInt32();
+                            if (!toolCallBuilders.TryGetValue(index, out var entry))
+                                entry = (null, null, new StringBuilder());
+
+                            if (tc.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String)
+                                entry.Id = idEl.GetString();
+
+                            if (tc.TryGetProperty("function", out var fnEl))
+                            {
+                                if (fnEl.TryGetProperty("name", out var nameEl) && nameEl.ValueKind == JsonValueKind.String)
+                                    entry.Name = nameEl.GetString();
+                                if (fnEl.TryGetProperty("arguments", out var argsEl) && argsEl.ValueKind == JsonValueKind.String)
+                                    entry.Args.Append(argsEl.GetString());
+                            }
+
+                            toolCallBuilders[index] = entry;
+                        }
+                    }
+                }
+
+                if (finishReason == "tool_calls" && toolCallBuilders.Count > 0)
+                {
+                    var orderedCalls = toolCallBuilders.OrderBy(kvp => kvp.Key).Select(kvp => kvp.Value).ToList();
+
+                    messages.Add(new
+                    {
+                        role = "assistant",
+                        content = (string?)null,
+                        tool_calls = orderedCalls.Select(call => new
+                        {
+                            id = call.Id,
+                            type = "function",
+                            function = new { name = call.Name, arguments = call.Args.ToString() }
+                        }).ToArray()
+                    });
+
+                    foreach (var call in orderedCalls)
+                    {
+                        var result = await ExecuteToolAsync(call.Name ?? "", call.Args.ToString(), userId, surfacedProducts);
+                        messages.Add(new { role = "tool", tool_call_id = call.Id, content = result });
+                    }
+
+                    continue; // next round, now with tool results in context
+                }
+
+                // No more tools requested — what streamed this round is the final answer.
+                var finalReply = contentBuilder.Length > 0 ? contentBuilder.ToString() : FallbackText();
+                await LogChatAsync(userId, message, finalReply);
+
+                if (surfacedProducts.Count > 0)
+                    yield return new ChatProductsEvent(surfacedProducts.Take(MaxCardsPerReply).ToList());
+
+                yield return new ChatDoneEvent();
+                yield break;
+            }
+
+            var fallback = FallbackText();
+            yield return new ChatTextChunkEvent(fallback);
+            await LogChatAsync(userId, message, fallback);
+            yield return new ChatDoneEvent();
+        }
+
+        // ==================== Tool definitions ====================
 
         private static object[] BuildToolDefinitions(bool isLoggedIn)
         {
@@ -176,6 +321,21 @@ namespace ShoppingCart.Infrastructure.Services
                     type = "function",
                     function = new
                     {
+                        name = "get_product_reviews",
+                        description = "Get the average rating and number of reviews for a product (by its productId). Use when asked if a product is good, well-reviewed, or worth buying.",
+                        parameters = new
+                        {
+                            type = "object",
+                            properties = new { productId = new { type = "integer", description = "The productId to check reviews for" } },
+                            required = new[] { "productId" }
+                        }
+                    }
+                },
+                new
+                {
+                    type = "function",
+                    function = new
+                    {
                         name = "list_categories",
                         description = "List the store's product categories.",
                         parameters = new { type = "object", properties = new { }, required = Array.Empty<string>() }
@@ -215,7 +375,7 @@ namespace ShoppingCart.Infrastructure.Services
             return tools.ToArray();
         }
 
-        // ---------------- Tool execution ----------------
+        // ==================== Tool execution ====================
 
         private async Task<string> ExecuteToolAsync(string name, string argsJson, int? userId, List<ChatProductDto> surfaced)
         {
@@ -232,6 +392,9 @@ namespace ShoppingCart.Infrastructure.Services
                     case "get_similar_products":
                         return await GetSimilarProductsAsync(args, surfaced);
 
+                    case "get_product_reviews":
+                        return await GetProductReviewsAsync(args);
+
                     case "list_categories":
                         {
                             var categories = await _categoryService.GetAllCategoriesAsync();
@@ -240,8 +403,6 @@ namespace ShoppingCart.Infrastructure.Services
 
                     case "get_recent_orders":
                     case "get_order_status":
-                        // Defense in depth: even if the model somehow requests an order tool
-                        // for a guest, refuse here on the server.
                         if (userId is null)
                             return JsonSerializer.Serialize(new { error = "The customer must be logged in to look up orders." });
 
@@ -260,8 +421,6 @@ namespace ShoppingCart.Infrastructure.Services
             }
         }
 
-        // ---- Product tools ----
-
         private async Task<string> SearchProductsAsync(JsonElement args, List<ChatProductDto> surfaced)
         {
             var query = GetString(args, "query");
@@ -271,8 +430,6 @@ namespace ShoppingCart.Infrastructure.Services
             var inStockOnly = args.TryGetProperty("inStockOnly", out var isProp) && isProp.ValueKind == JsonValueKind.True;
             var sortBy = GetString(args, "sortBy");
 
-            // The repository only matches the whole phrase against the product NAME, so for
-            // natural-language queries we load active products and score keywords ourselves.
             var all = (await _productService.GetAllProductsAsync(null, null, null)).ToList();
 
             IEnumerable<(Application.DTOs.ProductDtos.ProductDto P, int Score)> scored =
@@ -329,8 +486,6 @@ namespace ShoppingCart.Infrastructure.Services
                 .Select(s => new ChatProductDto(s.ProductId, s.Name, s.CategoryName, s.Price, s.StockQuantity, s.ImageUrl))
                 .ToList();
 
-            // The Python recommender may be down (it returns empty on failure) —
-            // fall back to other products in the same category so the answer is still useful.
             if (similar.Count == 0)
             {
                 var reference = await _productService.GetProductAsync(productId);
@@ -359,7 +514,17 @@ namespace ShoppingCart.Infrastructure.Services
             }));
         }
 
-        // ---- Order tools (unchanged from Tier 2) ----
+        private async Task<string> GetProductReviewsAsync(JsonElement args)
+        {
+            if (!args.TryGetProperty("productId", out var idProp) || !idProp.TryGetInt32(out var productId))
+                return JsonSerializer.Serialize(new { error = "A numeric productId is required." });
+
+            var summary = await _reviewService.GetReviewSummaryAsync(productId);
+
+            return summary.ReviewCount == 0
+                ? JsonSerializer.Serialize(new { message = "This product has no reviews yet." })
+                : JsonSerializer.Serialize(new { averageRating = summary.AverageRating, reviewCount = summary.ReviewCount });
+        }
 
         private async Task<string> GetRecentOrdersAsync(int userId)
         {
@@ -403,7 +568,26 @@ namespace ShoppingCart.Infrastructure.Services
             });
         }
 
-        // ---------------- Helpers ----------------
+        // ==================== Helpers ====================
+
+        private async Task LogChatAsync(int? userId, string userMessage, string assistantReply)
+        {
+            try
+            {
+                await _chatLogRepository.CreateAsync(new ChatLog
+                {
+                    UserId = userId,
+                    UserMessage = userMessage,
+                    AssistantReply = assistantReply
+                });
+            }
+            catch (Exception ex)
+            {
+                // Same reasoning as every other non-critical side effect in this app:
+                // a logging failure must never surface to the person chatting.
+                Console.WriteLine($"Failed to save chat log: {ex.Message}");
+            }
+        }
 
         private static void AddSurfaced(List<ChatProductDto> list, ChatProductDto product)
         {
@@ -418,7 +602,7 @@ namespace ShoppingCart.Infrastructure.Services
             return query.ToLowerInvariant()
                 .Split(new[] { ' ', ',', '.', '-', '/', '&' }, StringSplitOptions.RemoveEmptyEntries)
                 .Where(t => t.Length >= 2)
-                .Select(t => t.Length > 3 ? t.TrimEnd('s') : t) // crude plural handling: "headphones" -> "headphone"
+                .Select(t => t.Length > 3 ? t.TrimEnd('s') : t)
                 .Distinct()
                 .ToList();
         }
@@ -448,11 +632,11 @@ namespace ShoppingCart.Infrastructure.Services
         private static string? Truncate(string? text, int max) =>
             text is null ? null : text.Length <= max ? text : text[..max] + "...";
 
-        // ---------------- Prompt ----------------
+        // ==================== Prompt ====================
 
         private async Task<string> BuildSystemPromptAsync(bool isLoggedIn)
         {
-            var policies = await _policyRepository.GetAllAsync();
+            var policies = await _policyService.GetAllPoliciesAsync();
 
             var policyText = policies.Any()
                 ? string.Join("\n\n", policies.Select(p => $"### {p.Title}\n{p.Content}"))
@@ -484,6 +668,8 @@ namespace ShoppingCart.Infrastructure.Services
                 - ONLY recommend or mention products that a tool returned in this conversation. Never invent products,
                   prices, or specs. Quote prices and stock exactly as the tools give them.
                 - If the customer states a budget, pass it as maxPrice. If they name a type of item, search for it.
+                - Use get_product_reviews when asked if a product is good or well-reviewed. State the rating/count
+                  exactly as returned, and never claim a rating exists if the tool says there are no reviews yet.
                 - Product cards are shown to the customer automatically beneath your message, so do NOT repeat every
                   detail. Give a one or two sentence summary, mention the top pick and why, and note if something is low
                   or out of stock.

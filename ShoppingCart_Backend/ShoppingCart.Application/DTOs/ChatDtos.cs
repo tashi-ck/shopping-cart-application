@@ -17,9 +17,12 @@ namespace ShoppingCart.Application.DTOs
             int ProductId, string Name, string CategoryName,
             decimal Price, int StockQuantity, string? ImageUrl);
 
-        // What the service returns internally: text + any products surfaced by tools
+        // What the non-streaming path returns: text + any products surfaced by tools
         public record ChatReplyResult(string Reply, List<ChatProductDto> Products);
 
         public record ChatResponseDto(string Reply, List<ChatProductDto> Products);
+
+        // Admin: one logged exchange
+        public record ChatLogDto(int ChatLogId, string? UserEmail, string UserMessage, string AssistantReply, DateTime CreatedAt);
     }
 }

@@ -64,6 +64,8 @@ builder.Services.AddScoped<IReviewService, ShoppingCart.Application.Services.Rev
 builder.Services.AddHttpClient<IRecommendationService, RecommendationService>();
 builder.Services.AddScoped<IPolicyRepository, PolicyRepository>();
 builder.Services.AddScoped<IPolicyService, PolicyService>();
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<IChatLogRepository, ChatLogRepository>();
 
 // Resilient HttpClient: short timeout so an outage fails fast and falls
 // through to "Flag" (=> Pending) in ReviewService, rather than hanging the request.
@@ -79,7 +81,7 @@ builder.Services.AddHttpClient<IContentModerationService, AiContentModerationSer
 // fails fast into AiChatService's fallback reply, instead of hanging the request.
 builder.Services.AddHttpClient<IChatService, AiChatService>(client =>
 {
-    client.Timeout = TimeSpan.FromSeconds(15);
+    client.Timeout = TimeSpan.FromSeconds(60);
     client.DefaultRequestHeaders.Authorization =
         new System.Net.Http.Headers.AuthenticationHeaderValue(
             "Bearer", builder.Configuration["Chatbot:ApiKey"]);

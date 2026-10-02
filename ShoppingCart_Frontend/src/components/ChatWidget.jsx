@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth0 } from "@auth0/auth0-react";
 import { MessageCircle, X, Send, Loader2, Bot, ImageOff, ShoppingCart, Check, RotateCcw } from "lucide-react";
-import { sendChatMessage } from "../api/chatApi";
 import { useCart } from "../context/CartContext";
 
 const GUEST_GREETING = {
@@ -18,9 +17,6 @@ const USER_GREETING = {
 const GUEST_SUGGESTIONS = ["Show me headphones under $100", "What's your return policy?", "Recommend something for working out"];
 const USER_SUGGESTIONS = ["Where is my latest order?", "Show me office gear", "What's your return policy?"];
 
-// sessionStorage (not localStorage): survives a refresh or back/forward within
-// this tab, but clears when the tab closes — so history doesn't grow forever
-// or bleed into a completely separate later visit.
 const STORAGE_KEY = "chatWidgetHistory";
 
 function loadStoredChat() {
@@ -36,8 +32,7 @@ function saveStoredChat(data) {
   try {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   } catch {
-    // Storage can fail (private browsing, quota) — losing persistence
-    // silently is fine, the chat still works for the rest of this session.
+    // Storage can fail (private browsing, quota) — losing persistence silently is fine.
   }
 }
 
@@ -115,12 +110,9 @@ function ChatProductCard({ product, onOpen }) {
 
 export default function ChatWidget() {
   const navigate = useNavigate();
-  const { isAuthenticated, isLoading: authLoading } = useAuth0();
+  const { isAuthenticated, isLoading: authLoading, getAccessTokenSilently } = useAuth0();
 
   const [open, setOpen] = useState(false);
-  // Lazy initial state: try to show *something* sane immediately (avoids a
-  // flash of the wrong greeting) — the effect below reconciles it against
-  // Auth0's real state and sessionStorage once auth has resolved.
   const [messages, setMessages] = useState(() => {
     const stored = loadStoredChat();
     return stored?.messages?.length ? stored.messages : [GUEST_GREETING];
@@ -133,13 +125,8 @@ export default function ChatWidget() {
   const greeting = isAuthenticated ? USER_GREETING : GUEST_GREETING;
   const suggestions = isAuthenticated ? USER_SUGGESTIONS : GUEST_SUGGESTIONS;
 
-  // Runs once Auth0 knows the real login state (true on first load after a
-  // refresh, and again whenever login/logout actually happens). Restores the
-  // saved conversation only if it was saved under the SAME auth state —
-  // otherwise starts fresh, same as the old "reset on auth change" behavior.
   useEffect(() => {
     if (authLoading) return;
-
     const stored = loadStoredChat();
     if (stored && stored.isAuthenticated === isAuthenticated && stored.messages?.length) {
       setMessages(stored.messages);
@@ -150,9 +137,6 @@ export default function ChatWidget() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, isAuthenticated]);
 
-  // Persist after every change, but only once hydration above has run —
-  // otherwise the lazy initial state would immediately overwrite storage
-  // before we've had a chance to read and reconcile it.
   useEffect(() => {
     if (!hydratedRef.current) return;
     saveStoredChat({ isAuthenticated, messages });
@@ -173,6 +157,43 @@ export default function ChatWidget() {
     setMessages([greeting]);
   };
 
+  // Mutates the LAST message in the list (the in-progress assistant reply).
+  const updateLastAssistantMessage = (updater) => {
+    setMessages((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      next[next.length - 1] = { ...last, ...updater(last) };
+      return next;
+    });
+  };
+
+  const handleSseEvent = (rawEvent) => {
+    const lines = rawEvent.split("\n");
+    const eventLine = lines.find((l) => l.startsWith("event: "));
+    const dataLine = lines.find((l) => l.startsWith("data: "));
+    if (!eventLine || !dataLine) return;
+
+    const eventName = eventLine.slice("event: ".length);
+    let data;
+    try {
+      data = JSON.parse(dataLine.slice("data: ".length));
+    } catch {
+      return;
+    }
+
+    if (eventName === "chunk") {
+      updateLastAssistantMessage((last) => ({ content: (last.content || "") + data }));
+    } else if (eventName === "products") {
+      try {
+        updateLastAssistantMessage(() => ({ products: JSON.parse(data) }));
+      } catch {
+        // malformed product payload — the text reply still shows fine without it
+      }
+    } else if (eventName === "error") {
+      updateLastAssistantMessage(() => ({ content: data }));
+    }
+  };
+
   const send = async (text) => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
@@ -182,19 +203,53 @@ export default function ChatWidget() {
     setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
     setInput("");
     setSending(true);
+    // Placeholder assistant bubble that streamed chunks get appended into.
+    setMessages((prev) => [...prev, { role: "assistant", content: "", products: [] }]);
 
     try {
-      const res = await sendChatMessage(trimmed, priorHistory);
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: res.data.reply, products: res.data.products ?? [] },
-      ]);
-    } catch (err) {
-      const message =
-        err.response?.status === 429
-          ? err.response?.data || "You're sending messages too quickly. Please wait a moment and try again."
-          : "Sorry, something went wrong. Please try again in a moment.";
-      setMessages((prev) => [...prev, { role: "assistant", content: message }]);
+      const headers = { "Content-Type": "application/json" };
+      if (isAuthenticated) {
+        try {
+          const token = await getAccessTokenSilently();
+          headers.Authorization = `Bearer ${token}`;
+        } catch {
+          // Proceed without a token — backend treats this as a guest request.
+        }
+      }
+
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/chat/stream`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ message: trimmed, history: priorHistory }),
+      });
+
+      if (!response.ok || !response.body) {
+        const text =
+          response.status === 429
+            ? (await response.text()) || "You're sending messages too quickly. Please wait a moment and try again."
+            : "Sorry, something went wrong. Please try again in a moment.";
+        updateLastAssistantMessage(() => ({ content: text }));
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let sepIndex;
+        while ((sepIndex = buffer.indexOf("\n\n")) !== -1) {
+          const rawEvent = buffer.slice(0, sepIndex);
+          buffer = buffer.slice(sepIndex + 2);
+          handleSseEvent(rawEvent);
+        }
+      }
+    } catch {
+      updateLastAssistantMessage(() => ({ content: "Sorry, something went wrong. Please try again in a moment." }));
     } finally {
       setSending(false);
     }
@@ -239,27 +294,36 @@ export default function ChatWidget() {
           </div>
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-gray-50">
-            {messages.map((m, i) => (
-              <div key={i} className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}>
-                <div
-                  className={`max-w-[85%] text-sm rounded-2xl px-3.5 py-2 leading-relaxed whitespace-pre-line ${
-                    m.role === "user"
-                      ? "bg-indigo-600 text-white rounded-br-sm"
-                      : "bg-white border border-gray-200 text-gray-700 rounded-bl-sm"
-                  }`}
-                >
-                  {m.content}
-                </div>
+            {messages.map((m, i) => {
+              const isStreamingPlaceholder =
+                m.role === "assistant" && m.content === "" && sending && i === messages.length - 1;
 
-                {m.products?.length > 0 && (
-                  <div className="w-[92%] mt-2 space-y-1.5">
-                    {m.products.map((p) => (
-                      <ChatProductCard key={p.productId} product={p} onOpen={openProduct} />
-                    ))}
+              return (
+                <div key={i} className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}>
+                  <div
+                    className={`max-w-[85%] text-sm rounded-2xl px-3.5 py-2 leading-relaxed whitespace-pre-line ${
+                      m.role === "user"
+                        ? "bg-indigo-600 text-white rounded-br-sm"
+                        : "bg-white border border-gray-200 text-gray-700 rounded-bl-sm"
+                    }`}
+                  >
+                    {isStreamingPlaceholder ? (
+                      <Loader2 size={14} className="animate-spin text-gray-400" />
+                    ) : (
+                      m.content
+                    )}
                   </div>
-                )}
-              </div>
-            ))}
+
+                  {m.products?.length > 0 && (
+                    <div className="w-[92%] mt-2 space-y-1.5">
+                      {m.products.map((p) => (
+                        <ChatProductCard key={p.productId} product={p} onOpen={openProduct} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
 
             {showSuggestions && (
               <div className="flex flex-wrap gap-2 pt-1">
@@ -273,14 +337,6 @@ export default function ChatWidget() {
                     {s}
                   </button>
                 ))}
-              </div>
-            )}
-
-            {sending && (
-              <div className="flex justify-start">
-                <div className="bg-white border border-gray-200 rounded-2xl rounded-bl-sm px-3.5 py-2">
-                  <Loader2 size={14} className="animate-spin text-gray-400" />
-                </div>
               </div>
             )}
           </div>

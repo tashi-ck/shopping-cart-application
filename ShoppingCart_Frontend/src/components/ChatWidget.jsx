@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth0 } from "@auth0/auth0-react";
 import ReactMarkdown from "react-markdown";
-import { MessageCircle, X, Send, Loader2, Bot, ImageOff, ShoppingCart, Check, RotateCcw } from "lucide-react";
+import { MessageCircle, X, Send, Loader2, Bot, ImageOff, ShoppingCart, Check, RotateCcw, Pencil } from "lucide-react";
 import { useCart } from "../context/CartContext";
 
 const GUEST_GREETING = {
@@ -37,9 +37,6 @@ function saveStoredChat(data) {
   }
 }
 
-// Markdown elements render with browser-default spacing/bullets by default,
-// which looks oversized inside a small chat bubble — these overrides tighten
-// them to match the bubble's existing text-sm / leading-relaxed styling.
 const markdownComponents = {
   p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
   strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
@@ -55,18 +52,11 @@ const markdownComponents = {
   code: ({ children }) => (
     <code className="bg-black/5 rounded px-1 py-0.5 text-[0.85em] font-mono">{children}</code>
   ),
-  // The LLM's own instructions are plain text, not markdown, so heading syntax
-  // in a reply ("# Shipping") should still read as inline emphasis, not a giant
-  // heading that blows out the chat bubble's layout.
   h1: ({ children }) => <p className="font-semibold mb-2 last:mb-0">{children}</p>,
   h2: ({ children }) => <p className="font-semibold mb-2 last:mb-0">{children}</p>,
   h3: ({ children }) => <p className="font-semibold mb-2 last:mb-0">{children}</p>,
 };
 
-// Renders assistant replies as markdown once finished; shows raw text for the
-// user's own messages (never interpret their input as formatting) and for an
-// assistant message still mid-stream (partial markdown syntax like an unclosed
-// "**" would otherwise flicker/misrender while tokens are still arriving).
 function ChatMessageContent({ message, isStreaming }) {
   if (message.role === "user" || isStreaming) {
     return <span className="whitespace-pre-line">{message.content}</span>;
@@ -162,6 +152,8 @@ export default function ChatWidget() {
   });
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [editingIndex, setEditingIndex] = useState(null);
+  const [editText, setEditText] = useState("");
   const scrollRef = useRef(null);
   const hydratedRef = useRef(false);
 
@@ -198,6 +190,7 @@ export default function ChatWidget() {
 
   const handleClearChat = () => {
     setMessages([greeting]);
+    setEditingIndex(null);
   };
 
   const updateLastAssistantMessage = (updater) => {
@@ -236,16 +229,15 @@ export default function ChatWidget() {
     }
   };
 
-  const send = async (text) => {
-    const trimmed = text.trim();
-    if (!trimmed || sending) return;
+  // Shared by normal send, edit-resend, and regenerate: streams a reply to
+  // `userText` given everything in `baseMessages` as the conversation so far
+  // (baseMessages must NOT include the new user turn or a placeholder reply —
+  // this function appends both).
+  const streamFrom = async (baseMessages, userText) => {
+    const priorHistory = baseMessages.slice(1).map((m) => ({ role: m.role, content: m.content }));
 
-    const priorHistory = messages.slice(1).map((m) => ({ role: m.role, content: m.content }));
-
-    setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
-    setInput("");
+    setMessages([...baseMessages, { role: "user", content: userText }, { role: "assistant", content: "", products: [] }]);
     setSending(true);
-    setMessages((prev) => [...prev, { role: "assistant", content: "", products: [] }]);
 
     try {
       const headers = { "Content-Type": "application/json" };
@@ -261,7 +253,7 @@ export default function ChatWidget() {
       const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/chat/stream`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ message: trimmed, history: priorHistory }),
+        body: JSON.stringify({ message: userText, history: priorHistory }),
       });
 
       if (!response.ok || !response.body) {
@@ -296,12 +288,60 @@ export default function ChatWidget() {
     }
   };
 
+  const send = (text) => {
+    const trimmed = text.trim();
+    if (!trimmed || sending) return;
+    setInput("");
+    streamFrom(messages, trimmed);
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
     send(input);
   };
 
+  // --- Edit: replaces a past user message and drops everything after it,
+  // then re-asks with the edited text (the old reply no longer applies to
+  // the new question, so it can't just stay in place). ---
+  const startEdit = (index) => {
+    if (sending) return;
+    setEditingIndex(index);
+    setEditText(messages[index].content);
+  };
+
+  const cancelEdit = () => {
+    setEditingIndex(null);
+    setEditText("");
+  };
+
+  const submitEdit = () => {
+    const trimmed = editText.trim();
+    if (!trimmed || editingIndex === null) return;
+    const baseMessages = messages.slice(0, editingIndex); // everything before the edited message
+    setEditingIndex(null);
+    setEditText("");
+    streamFrom(baseMessages, trimmed);
+  };
+
+  // --- Regenerate: re-asks the same preceding user message, replacing only
+  // the assistant's reply to it. ---
+  const regenerate = (assistantIndex) => {
+    if (sending) return;
+    const userIndex = assistantIndex - 1;
+    const userMessage = messages[userIndex];
+    if (!userMessage || userMessage.role !== "user") return;
+
+    const baseMessages = messages.slice(0, userIndex); // everything before that user turn
+    streamFrom(baseMessages, userMessage.content);
+  };
+
   const showSuggestions = messages.length === 1 && !sending;
+
+  // Only the very last exchange gets edit/regenerate controls — editing or
+  // regenerating something mid-conversation would leave later messages
+  // referring to a question/answer that no longer exists.
+  const lastUserIndex = [...messages].map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i !== -1).pop();
+  const lastAssistantIndex = messages.length - 1;
 
   return (
     <div className="fixed bottom-5 right-5 z-50">
@@ -340,21 +380,88 @@ export default function ChatWidget() {
               const isStreaming = m.role === "assistant" && sending && isLast;
               const isEmptyPlaceholder = isStreaming && m.content === "";
 
+              const isEditingThis = editingIndex === i;
+              const canEdit = m.role === "user" && i === lastUserIndex && !sending && editingIndex === null;
+              const canRegenerate =
+                m.role === "assistant" && i === lastAssistantIndex && !sending && !isEmptyPlaceholder && editingIndex === null && i > 0;
+
               return (
                 <div key={i} className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}>
-                  <div
-                    className={`max-w-[85%] text-sm rounded-2xl px-3.5 py-2 leading-relaxed ${
-                      m.role === "user"
-                        ? "bg-indigo-600 text-white rounded-br-sm"
-                        : "bg-white border border-gray-200 text-gray-700 rounded-bl-sm"
-                    }`}
-                  >
-                    {isEmptyPlaceholder ? (
-                      <Loader2 size={14} className="animate-spin text-gray-400" />
-                    ) : (
-                      <ChatMessageContent message={m} isStreaming={isStreaming} />
-                    )}
-                  </div>
+                  {isEditingThis ? (
+                    <div className="w-[90%] bg-white border border-indigo-300 rounded-2xl rounded-br-sm p-2.5 shadow-sm">
+                      <textarea
+                        autoFocus
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            submitEdit();
+                          } else if (e.key === "Escape") {
+                            cancelEdit();
+                          }
+                        }}
+                        rows={2}
+                        maxLength={1000}
+                        className="w-full text-sm text-gray-800 resize-none focus:outline-none"
+                      />
+                      <div className="flex justify-end gap-2 mt-1.5">
+                        <button
+                          type="button"
+                          onClick={cancelEdit}
+                          className="text-xs font-medium text-gray-500 hover:text-gray-700 px-2 py-1"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={submitEdit}
+                          disabled={!editText.trim()}
+                          className="text-xs font-medium bg-indigo-600 text-white rounded-lg px-3 py-1 hover:bg-indigo-700 disabled:opacity-40"
+                        >
+                          Save & resend
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      className={`max-w-[85%] text-sm rounded-2xl px-3.5 py-2 leading-relaxed ${
+                        m.role === "user"
+                          ? "bg-indigo-600 text-white rounded-br-sm"
+                          : "bg-white border border-gray-200 text-gray-700 rounded-bl-sm"
+                      }`}
+                    >
+                      {isEmptyPlaceholder ? (
+                        <Loader2 size={14} className="animate-spin text-gray-400" />
+                      ) : (
+                        <ChatMessageContent message={m} isStreaming={isStreaming} />
+                      )}
+                    </div>
+                  )}
+
+                  {/* Edit / regenerate controls, shown only under the final exchange */}
+                  {!isEditingThis && (canEdit || canRegenerate) && (
+                    <div className="mt-1">
+                      {canEdit && (
+                        <button
+                          type="button"
+                          onClick={() => startEdit(i)}
+                          className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-indigo-600 transition"
+                        >
+                          <Pencil size={11} /> Edit
+                        </button>
+                      )}
+                      {canRegenerate && (
+                        <button
+                          type="button"
+                          onClick={() => regenerate(i)}
+                          className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-indigo-600 transition"
+                        >
+                          <RotateCcw size={11} /> Regenerate
+                        </button>
+                      )}
+                    </div>
+                  )}
 
                   {m.products?.length > 0 && (
                     <div className="w-[92%] mt-2 space-y-1.5">
@@ -396,11 +503,12 @@ export default function ChatWidget() {
               onChange={(e) => setInput(e.target.value)}
               placeholder="Ask about products, orders, policies..."
               maxLength={1000}
-              className="flex-1 rounded-full border border-gray-200 bg-gray-50 focus:bg-white px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
+              disabled={editingIndex !== null}
+              className="flex-1 rounded-full border border-gray-200 bg-gray-50 focus:bg-white px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition disabled:opacity-50"
             />
             <button
               type="submit"
-              disabled={sending || !input.trim()}
+              disabled={sending || !input.trim() || editingIndex !== null}
               className="flex items-center justify-center w-9 h-9 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 transition shrink-0"
               aria-label="Send message"
             >

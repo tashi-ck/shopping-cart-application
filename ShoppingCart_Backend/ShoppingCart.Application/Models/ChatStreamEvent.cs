@@ -7,9 +7,6 @@ using static ShoppingCart.Application.DTOs.ChatDtos;
 
 namespace ShoppingCart.Application.Models
 {
-    // The kinds of thing the streaming chat service can emit, in order:
-    // zero or more status/text events interleaved, then an optional products
-    // event, then exactly one Done.
     public abstract record ChatStreamEvent;
 
     public record ChatTextChunkEvent(string Text) : ChatStreamEvent;
@@ -19,6 +16,11 @@ namespace ShoppingCart.Application.Models
     public record ChatStatusEvent(string Label) : ChatStreamEvent;
 
     public record ChatProductsEvent(List<ChatProductDto> Products) : ChatStreamEvent;
+
+    // Fired when the bot wants to propose adding specific products to the
+    // cart — the frontend renders this as a confirmation card. Nothing is
+    // actually added until the customer clicks it.
+    public record ChatCartProposalEvent(List<ChatProductDto> Products) : ChatStreamEvent;
 
     public record ChatDoneEvent : ChatStreamEvent;
 }

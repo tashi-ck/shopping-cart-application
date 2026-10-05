@@ -217,7 +217,15 @@ export default function ChatWidget() {
     }
 
     if (eventName === "chunk") {
-      updateLastAssistantMessage((last) => ({ content: (last.content || "") + data }));
+      // Real text has started arriving, so any "Searching..." style status no
+      // longer applies — the bot has moved from "looking something up" to
+      // "writing the answer".
+      updateLastAssistantMessage((last) => ({
+        content: (last.content || "") + data,
+        statusLabel: null,
+      }));
+    } else if (eventName === "status") {
+      updateLastAssistantMessage(() => ({ statusLabel: data }));
     } else if (eventName === "products") {
       try {
         updateLastAssistantMessage(() => ({ products: JSON.parse(data) }));
@@ -225,18 +233,18 @@ export default function ChatWidget() {
         // malformed product payload — the text reply still shows fine without it
       }
     } else if (eventName === "error") {
-      updateLastAssistantMessage(() => ({ content: data }));
+      updateLastAssistantMessage(() => ({ content: data, statusLabel: null }));
     }
   };
 
-  // Shared by normal send, edit-resend, and regenerate: streams a reply to
-  // `userText` given everything in `baseMessages` as the conversation so far
-  // (baseMessages must NOT include the new user turn or a placeholder reply —
-  // this function appends both).
   const streamFrom = async (baseMessages, userText) => {
     const priorHistory = baseMessages.slice(1).map((m) => ({ role: m.role, content: m.content }));
 
-    setMessages([...baseMessages, { role: "user", content: userText }, { role: "assistant", content: "", products: [] }]);
+    setMessages([
+      ...baseMessages,
+      { role: "user", content: userText },
+      { role: "assistant", content: "", products: [], statusLabel: null },
+    ]);
     setSending(true);
 
     try {
@@ -261,7 +269,7 @@ export default function ChatWidget() {
           response.status === 429
             ? (await response.text()) || "You're sending messages too quickly. Please wait a moment and try again."
             : "Sorry, something went wrong. Please try again in a moment.";
-        updateLastAssistantMessage(() => ({ content: text }));
+        updateLastAssistantMessage(() => ({ content: text, statusLabel: null }));
         return;
       }
 
@@ -282,7 +290,10 @@ export default function ChatWidget() {
         }
       }
     } catch {
-      updateLastAssistantMessage(() => ({ content: "Sorry, something went wrong. Please try again in a moment." }));
+      updateLastAssistantMessage(() => ({
+        content: "Sorry, something went wrong. Please try again in a moment.",
+        statusLabel: null,
+      }));
     } finally {
       setSending(false);
     }
@@ -300,9 +311,6 @@ export default function ChatWidget() {
     send(input);
   };
 
-  // --- Edit: replaces a past user message and drops everything after it,
-  // then re-asks with the edited text (the old reply no longer applies to
-  // the new question, so it can't just stay in place). ---
   const startEdit = (index) => {
     if (sending) return;
     setEditingIndex(index);
@@ -317,29 +325,24 @@ export default function ChatWidget() {
   const submitEdit = () => {
     const trimmed = editText.trim();
     if (!trimmed || editingIndex === null) return;
-    const baseMessages = messages.slice(0, editingIndex); // everything before the edited message
+    const baseMessages = messages.slice(0, editingIndex);
     setEditingIndex(null);
     setEditText("");
     streamFrom(baseMessages, trimmed);
   };
 
-  // --- Regenerate: re-asks the same preceding user message, replacing only
-  // the assistant's reply to it. ---
   const regenerate = (assistantIndex) => {
     if (sending) return;
     const userIndex = assistantIndex - 1;
     const userMessage = messages[userIndex];
     if (!userMessage || userMessage.role !== "user") return;
 
-    const baseMessages = messages.slice(0, userIndex); // everything before that user turn
+    const baseMessages = messages.slice(0, userIndex);
     streamFrom(baseMessages, userMessage.content);
   };
 
   const showSuggestions = messages.length === 1 && !sending;
 
-  // Only the very last exchange gets edit/regenerate controls — editing or
-  // regenerating something mid-conversation would leave later messages
-  // referring to a question/answer that no longer exists.
   const lastUserIndex = [...messages].map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i !== -1).pop();
   const lastAssistantIndex = messages.length - 1;
 
@@ -432,14 +435,16 @@ export default function ChatWidget() {
                       }`}
                     >
                       {isEmptyPlaceholder ? (
-                        <Loader2 size={14} className="animate-spin text-gray-400" />
+                        <span className="flex items-center gap-1.5 text-gray-400">
+                          <Loader2 size={14} className="animate-spin" />
+                          {m.statusLabel && <span className="text-xs">{m.statusLabel}</span>}
+                        </span>
                       ) : (
                         <ChatMessageContent message={m} isStreaming={isStreaming} />
                       )}
                     </div>
                   )}
 
-                  {/* Edit / regenerate controls, shown only under the final exchange */}
                   {!isEditingThis && (canEdit || canRegenerate) && (
                     <div className="mt-1">
                       {canEdit && (

@@ -26,6 +26,7 @@ import PoliciesPage from "./pages/PoliciesPage";
 import AdminPoliciesPage from "./pages/admin/AdminPoliciesPage";
 import ChatWidget from "./components/ChatWidget";
 import AdminChatLogsPage from "./pages/admin/AdminChatLogsPage";
+import AdminChatTestPage from "./pages/admin/AdminChatTestPage";
 
 export default function App() {
   
@@ -69,6 +70,7 @@ export default function App() {
           <Route path="reviews" element={<AdminReviewsPage />} />
           <Route path="policies" element={<AdminPoliciesPage />} />
           <Route path="chat-logs" element={<AdminChatLogsPage />} />
+          <Route path="chat-test" element={<AdminChatTestPage />} />
         </Route>
       </Routes>
       {showChat && <ChatWidget />}

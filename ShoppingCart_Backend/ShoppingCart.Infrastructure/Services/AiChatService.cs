@@ -31,6 +31,11 @@ namespace ShoppingCart.Infrastructure.Services
         private const int MaxProductsPerSearch = 5;
         private const int MaxCardsPerReply = 5;
 
+        // Lowered from 0.3 — a shopping assistant quoting real prices/stock/policy
+        // text should be as deterministic and literal as possible; a little less
+        // "creative" sampling noticeably cuts down on paraphrased/invented details.
+        private const double Temperature = 0.15;
+
         public AiChatService(
             HttpClient httpClient,
             IPolicyService policyService,
@@ -53,31 +58,52 @@ namespace ShoppingCart.Infrastructure.Services
             _model = configuration["Chatbot:Model"] ?? "gpt-4o-mini";
         }
 
-        // ==================== Non-streaming ====================
+        // ==================== Public entry points ====================
 
         public async Task<ChatReplyResult> GetReplyAsync(string message, List<ChatMessageDto> history, int? userId = null)
+        {
+            var isLoggedIn = userId.HasValue;
+            var systemPrompt = await BuildSystemPromptAsync(isLoggedIn, policyIds: null);
+            var tools = BuildToolDefinitions(isLoggedIn);
+
+            return await RunNonStreamingAsync(systemPrompt, tools, message, history, userId, scopeCategoryIds: null, logConversation: true);
+        }
+
+        public async Task<ChatReplyResult> GetTestReplyAsync(
+            string message, List<ChatMessageDto> history, List<int>? policyIds, List<int>? categoryIds)
+        {
+            // Sandbox always runs as "anonymous" (no order tools) — the admin panel
+            // is for QA'ing policies/products, not for impersonating a customer's
+            // order history, and never writes to ChatLogs so it doesn't pollute
+            // real-customer analytics.
+            var systemPrompt = await BuildSystemPromptAsync(isLoggedIn: false, policyIds);
+            var tools = BuildToolDefinitions(isLoggedIn: false);
+
+            return await RunNonStreamingAsync(systemPrompt, tools, message, history, userId: null, categoryIds, logConversation: false);
+        }
+
+        // ==================== Shared non-streaming loop ====================
+
+        private async Task<ChatReplyResult> RunNonStreamingAsync(
+            string systemPrompt, object[] tools, string message, List<ChatMessageDto> history,
+            int? userId, List<int>? scopeCategoryIds, bool logConversation)
         {
             var surfacedProducts = new List<ChatProductDto>();
             var cartProposal = new List<ChatProductDto>();
 
             try
             {
-                var isLoggedIn = userId.HasValue;
-                var systemPrompt = await BuildSystemPromptAsync(isLoggedIn);
-
                 var messages = new List<object> { new { role = "system", content = systemPrompt } };
                 foreach (var turn in history.TakeLast(MaxHistoryMessages))
                     messages.Add(new { role = turn.Role == "assistant" ? "assistant" : "user", content = turn.Content });
                 messages.Add(new { role = "user", content = message });
-
-                var tools = BuildToolDefinitions(isLoggedIn);
 
                 for (var round = 0; round < MaxToolRounds; round++)
                 {
                     var payload = new Dictionary<string, object>
                     {
                         ["model"] = _model,
-                        ["temperature"] = 0.3,
+                        ["temperature"] = Temperature,
                         ["messages"] = messages,
                         ["tools"] = tools,
                         ["tool_choice"] = "auto"
@@ -101,7 +127,7 @@ namespace ShoppingCart.Infrastructure.Services
                             : null;
 
                         var finalReply = string.IsNullOrWhiteSpace(reply) ? FallbackText() : reply.Trim();
-                        await LogChatAsync(userId, message, finalReply);
+                        if (logConversation) await LogChatAsync(userId, message, finalReply);
 
                         return new ChatReplyResult(
                             finalReply,
@@ -122,32 +148,32 @@ namespace ShoppingCart.Infrastructure.Services
                         var name = fn.GetProperty("name").GetString() ?? "";
                         var argsJson = fn.GetProperty("arguments").GetString() ?? "{}";
 
-                        var result = await ExecuteToolAsync(name, argsJson, userId, surfacedProducts, cartProposal);
+                        var result = await ExecuteToolAsync(name, argsJson, userId, surfacedProducts, cartProposal, scopeCategoryIds);
                         messages.Add(new { role = "tool", tool_call_id = callId, content = result });
                     }
                 }
 
                 var fallback = FallbackText();
-                await LogChatAsync(userId, message, fallback);
+                if (logConversation) await LogChatAsync(userId, message, fallback);
                 return new ChatReplyResult(fallback, surfacedProducts, cartProposal);
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Chatbot request failed, returning fallback reply: {ex.Message}");
                 var fallback = FallbackText();
-                await LogChatAsync(userId, message, fallback);
+                if (logConversation) await LogChatAsync(userId, message, fallback);
                 return new ChatReplyResult(fallback, surfacedProducts, cartProposal);
             }
         }
 
-        // ==================== Streaming ====================
+        // ==================== Streaming (live widget only — no scope support) ====================
 
         public async IAsyncEnumerable<ChatStreamEvent> StreamReplyAsync(
             string message, List<ChatMessageDto> history, int? userId,
             [EnumeratorCancellation] CancellationToken cancellationToken)
         {
             var isLoggedIn = userId.HasValue;
-            var systemPrompt = await BuildSystemPromptAsync(isLoggedIn);
+            var systemPrompt = await BuildSystemPromptAsync(isLoggedIn, policyIds: null);
 
             var messages = new List<object> { new { role = "system", content = systemPrompt } };
             foreach (var turn in history.TakeLast(MaxHistoryMessages))
@@ -163,7 +189,7 @@ namespace ShoppingCart.Infrastructure.Services
                 var payload = new Dictionary<string, object>
                 {
                     ["model"] = _model,
-                    ["temperature"] = 0.3,
+                    ["temperature"] = Temperature,
                     ["messages"] = messages,
                     ["tools"] = tools,
                     ["tool_choice"] = "auto",
@@ -252,11 +278,11 @@ namespace ShoppingCart.Infrastructure.Services
                     {
                         yield return new ChatStatusEvent(GetToolStatusLabel(call.Name ?? ""));
 
-                        var result = await ExecuteToolAsync(call.Name ?? "", call.Args.ToString(), userId, surfacedProducts, cartProposal);
+                        var result = await ExecuteToolAsync(call.Name ?? "", call.Args.ToString(), userId, surfacedProducts, cartProposal, scopeCategoryIds: null);
                         messages.Add(new { role = "tool", tool_call_id = call.Id, content = result });
                     }
 
-                    continue; // next round, now with tool results in context
+                    continue;
                 }
 
                 var finalReply = contentBuilder.Length > 0 ? contentBuilder.ToString() : FallbackText();
@@ -406,8 +432,12 @@ namespace ShoppingCart.Infrastructure.Services
 
         // ==================== Tool execution ====================
 
+        private static bool InScope(int categoryId, List<int>? scopeCategoryIds) =>
+            scopeCategoryIds is null || scopeCategoryIds.Count == 0 || scopeCategoryIds.Contains(categoryId);
+
         private async Task<string> ExecuteToolAsync(
-            string name, string argsJson, int? userId, List<ChatProductDto> surfaced, List<ChatProductDto> cartProposal)
+            string name, string argsJson, int? userId, List<ChatProductDto> surfaced,
+            List<ChatProductDto> cartProposal, List<int>? scopeCategoryIds)
         {
             try
             {
@@ -417,21 +447,24 @@ namespace ShoppingCart.Infrastructure.Services
                 switch (name)
                 {
                     case "search_products":
-                        return await SearchProductsAsync(args, surfaced);
+                        return await SearchProductsAsync(args, surfaced, scopeCategoryIds);
 
                     case "get_similar_products":
-                        return await GetSimilarProductsAsync(args, surfaced);
+                        return await GetSimilarProductsAsync(args, surfaced, scopeCategoryIds);
 
                     case "get_product_reviews":
-                        return await GetProductReviewsAsync(args);
+                        return await GetProductReviewsAsync(args, scopeCategoryIds);
 
                     case "propose_add_to_cart":
-                        return await ProposeAddToCartAsync(args, cartProposal);
+                        return await ProposeAddToCartAsync(args, cartProposal, scopeCategoryIds);
 
                     case "list_categories":
                         {
                             var categories = await _categoryService.GetAllCategoriesAsync();
-                            return JsonSerializer.Serialize(categories.Select(c => new { name = c.Name, description = c.Description }));
+                            var visible = scopeCategoryIds is { Count: > 0 }
+                                ? categories.Where(c => scopeCategoryIds.Contains(c.CategoryId))
+                                : categories;
+                            return JsonSerializer.Serialize(visible.Select(c => new { name = c.Name, description = c.Description }));
                         }
 
                     case "get_recent_orders":
@@ -454,7 +487,7 @@ namespace ShoppingCart.Infrastructure.Services
             }
         }
 
-        private async Task<string> SearchProductsAsync(JsonElement args, List<ChatProductDto> surfaced)
+        private async Task<string> SearchProductsAsync(JsonElement args, List<ChatProductDto> surfaced, List<int>? scopeCategoryIds)
         {
             var query = GetString(args, "query");
             var categoryName = GetString(args, "categoryName");
@@ -463,7 +496,9 @@ namespace ShoppingCart.Infrastructure.Services
             var inStockOnly = args.TryGetProperty("inStockOnly", out var isProp) && isProp.ValueKind == JsonValueKind.True;
             var sortBy = GetString(args, "sortBy");
 
-            var all = (await _productService.GetAllProductsAsync(null, null, null)).ToList();
+            var all = (await _productService.GetAllProductsAsync(null, null, null))
+                .Where(p => InScope(p.CategoryId, scopeCategoryIds))
+                .ToList();
 
             IEnumerable<(Application.DTOs.ProductDtos.ProductDto P, int Score)> scored =
                 all.Select(p => (p, 0));
@@ -510,12 +545,13 @@ namespace ShoppingCart.Infrastructure.Services
             }));
         }
 
-        private async Task<string> GetSimilarProductsAsync(JsonElement args, List<ChatProductDto> surfaced)
+        private async Task<string> GetSimilarProductsAsync(JsonElement args, List<ChatProductDto> surfaced, List<int>? scopeCategoryIds)
         {
             if (!args.TryGetProperty("productId", out var idProp) || !idProp.TryGetInt32(out var productId))
                 return JsonSerializer.Serialize(new { error = "A numeric productId is required." });
 
             var similar = (await _recommendationService.GetSimilarProductsAsync(productId, 5))
+                .Where(s => InScope(s.CategoryId, scopeCategoryIds))
                 .Select(s => new ChatProductDto(s.ProductId, s.Name, s.CategoryName, s.Price, s.StockQuantity, s.ImageUrl))
                 .ToList();
 
@@ -526,7 +562,7 @@ namespace ShoppingCart.Infrastructure.Services
                     return JsonSerializer.Serialize(new { error = $"Product {productId} was not found." });
 
                 similar = (await _productService.GetAllProductsAsync(reference.CategoryId, null, null))
-                    .Where(p => p.ProductId != productId && p.StockQuantity > 0)
+                    .Where(p => p.ProductId != productId && p.StockQuantity > 0 && InScope(p.CategoryId, scopeCategoryIds))
                     .Take(5)
                     .Select(p => new ChatProductDto(p.ProductId, p.Name, p.CategoryName, p.Price, p.StockQuantity, p.ImageUrl))
                     .ToList();
@@ -547,10 +583,17 @@ namespace ShoppingCart.Infrastructure.Services
             }));
         }
 
-        private async Task<string> GetProductReviewsAsync(JsonElement args)
+        private async Task<string> GetProductReviewsAsync(JsonElement args, List<int>? scopeCategoryIds)
         {
             if (!args.TryGetProperty("productId", out var idProp) || !idProp.TryGetInt32(out var productId))
                 return JsonSerializer.Serialize(new { error = "A numeric productId is required." });
+
+            if (scopeCategoryIds is { Count: > 0 })
+            {
+                var product = await _productService.GetProductAsync(productId);
+                if (product is null || !InScope(product.CategoryId, scopeCategoryIds))
+                    return JsonSerializer.Serialize(new { error = "That product is outside the current test scope." });
+            }
 
             var summary = await _reviewService.GetReviewSummaryAsync(productId);
 
@@ -559,10 +602,7 @@ namespace ShoppingCart.Infrastructure.Services
                 : JsonSerializer.Serialize(new { averageRating = summary.AverageRating, reviewCount = summary.ReviewCount });
         }
 
-        // Fetches each requested product fresh from the DB — this is what prevents
-        // the model from proposing a hallucinated product, price, or ID: whatever
-        // ends up in the confirmation card is always real, current catalog data.
-        private async Task<string> ProposeAddToCartAsync(JsonElement args, List<ChatProductDto> cartProposal)
+        private async Task<string> ProposeAddToCartAsync(JsonElement args, List<ChatProductDto> cartProposal, List<int>? scopeCategoryIds)
         {
             if (!args.TryGetProperty("productIds", out var idsProp) || idsProp.ValueKind != JsonValueKind.Array)
                 return JsonSerializer.Serialize(new { error = "productIds must be a non-empty array of integers." });
@@ -589,6 +629,12 @@ namespace ShoppingCart.Infrastructure.Services
                     continue;
                 }
 
+                if (!InScope(product.CategoryId, scopeCategoryIds))
+                {
+                    skipped.Add(new { productId = id, name = product.Name, reason = "outside test scope" });
+                    continue;
+                }
+
                 if (product.StockQuantity <= 0)
                 {
                     skipped.Add(new { productId = id, name = product.Name, reason = "out of stock" });
@@ -602,7 +648,7 @@ namespace ShoppingCart.Infrastructure.Services
             }
 
             if (added.Count == 0)
-                return JsonSerializer.Serialize(new { message = "None of the requested products could be added (not found or out of stock).", skipped });
+                return JsonSerializer.Serialize(new { message = "None of the requested products could be added (not found, out of scope, or out of stock).", skipped });
 
             return JsonSerializer.Serialize(new
             {
@@ -730,9 +776,12 @@ namespace ShoppingCart.Infrastructure.Services
 
         // ==================== Prompt ====================
 
-        private async Task<string> BuildSystemPromptAsync(bool isLoggedIn)
+        private async Task<string> BuildSystemPromptAsync(bool isLoggedIn, List<int>? policyIds)
         {
-            var policies = await _policyService.GetAllPoliciesAsync();
+            var allPolicies = await _policyService.GetAllPoliciesAsync();
+            var policies = policyIds is { Count: > 0 }
+                ? allPolicies.Where(p => policyIds.Contains(p.PolicyId))
+                : allPolicies;
 
             var policyText = policies.Any()
                 ? string.Join("\n\n", policies.Select(p => $"### {p.Title}\n{p.Content}"))
@@ -778,9 +827,21 @@ namespace ShoppingCart.Infrastructure.Services
 
                 {orderRules}
 
+                ACCURACY RULES — follow these strictly:
+                - Never state a specific price, stock level, rating, or order detail unless it came from a tool result
+                  that is visible in THIS exact conversation. If you are not certain a number from earlier in the
+                  conversation is still accurate, call the relevant tool again rather than repeating a possibly stale
+                  figure — prices and stock can change between turns.
+                - If a tool returns zero results, an error, or says something doesn't exist, say so plainly. Never
+                  substitute a guess, a similar-sounding item, or general knowledge to paper over a gap.
+                - If the customer's request is ambiguous (e.g. "the second one" with nothing listed earlier in this
+                  conversation), ask them to clarify, or re-run the relevant search, rather than guessing what they mean.
+                - Do not answer questions about topics outside shopping, these policies, and these products — including
+                  general knowledge, unrelated advice, or other companies — even if you happen to know the answer.
+                  Politely redirect to what you can help with instead.
+
                 Keep answers short, friendly, and to the point (2-4 sentences unless more detail is clearly needed).
-                Never discuss other customers or their orders. Do not discuss anything unrelated to shopping, orders,
-                products, or these policies. Do not provide legal, medical, or financial advice.
+                Never discuss other customers or their orders. Do not provide legal, medical, or financial advice.
 
                 --- STORE POLICIES ---
                 {policyText}

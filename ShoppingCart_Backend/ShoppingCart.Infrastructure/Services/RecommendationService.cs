@@ -47,6 +47,7 @@ namespace ShoppingCart.Infrastructure.Services
                     results.Add(new SimilarProductDto(
                         product.ProductId,
                         product.Name,
+                        product.CategoryId,
                         product.CategoryName,
                         product.Price,
                         product.StockQuantity,

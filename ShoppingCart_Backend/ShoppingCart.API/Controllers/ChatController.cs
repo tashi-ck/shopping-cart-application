@@ -106,6 +106,25 @@ namespace ShoppingCart.API.Controllers
             }
         }
 
+        // Admin QA sandbox — chat against a restricted subset of policies/categories
+        // before a real change goes live. Non-streaming for simplicity, and never
+        // logged to ChatLogs.
+        [HttpPost("admin/test")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> TestMessage([FromBody] ChatTestRequestDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.Message))
+                return BadRequest("Message cannot be empty.");
+
+            if (dto.Message.Length > 1000)
+                return BadRequest("Message is too long.");
+
+            var result = await _chatService.GetTestReplyAsync(
+                dto.Message, dto.History ?? new List<ChatMessageDto>(), dto.PolicyIds, dto.CategoryIds);
+
+            return Ok(new ChatResponseDto(result.Reply, result.Products, result.CartProposal));
+        }
+
         [HttpGet("admin/logs")]
         [Authorize(Roles = "Admin")]
         public async Task<IActionResult> GetChatLogs([FromQuery] int limit = 50)

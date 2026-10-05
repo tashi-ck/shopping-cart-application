@@ -11,6 +11,7 @@ namespace ShoppingCart.Application.DTOs
         public record SimilarProductDto(
             int ProductId,
             string Name,
+            int CategoryId,
             string CategoryName,
             decimal Price,
             int StockQuantity,

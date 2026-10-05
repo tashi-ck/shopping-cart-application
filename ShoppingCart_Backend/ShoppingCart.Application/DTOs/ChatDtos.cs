@@ -12,17 +12,21 @@ namespace ShoppingCart.Application.DTOs
 
         public record SendChatMessageDto(string Message, List<ChatMessageDto>? History);
 
-        // Slim product shape for chat cards
+        // Admin QA sandbox: an optional subset of policies and/or categories to
+        // restrict the bot to, so a change can be verified before it's live.
+        // Null/empty on either list means "no restriction" (same as production).
+        public record ChatTestRequestDto(
+            string Message, List<ChatMessageDto>? History,
+            List<int>? PolicyIds, List<int>? CategoryIds);
+
         public record ChatProductDto(
             int ProductId, string Name, string CategoryName,
             decimal Price, int StockQuantity, string? ImageUrl);
 
-        // What the non-streaming path returns: text + any products/cart proposal surfaced by tools
         public record ChatReplyResult(string Reply, List<ChatProductDto> Products, List<ChatProductDto> CartProposal);
 
         public record ChatResponseDto(string Reply, List<ChatProductDto> Products, List<ChatProductDto> CartProposal);
 
-        // Admin: one logged exchange
         public record ChatLogDto(int ChatLogId, string? UserEmail, string UserMessage, string AssistantReply, DateTime CreatedAt);
     }
 }

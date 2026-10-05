@@ -8,3 +8,6 @@ export const sendChatMessage = (message, history) =>
 
 export const getChatLogsForAdmin = (limit = 50) =>
   axiosClient.get("/chat/admin/logs", { params: { limit } });
+
+export const testChatMessage = (message, history, policyIds, categoryIds) =>
+  axiosClient.post("/chat/admin/test", { message, history, policyIds, categoryIds });

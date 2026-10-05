@@ -15,6 +15,7 @@ namespace ShoppingCart.API.Controllers
     {
         private readonly IChatService _chatService;
         private readonly IChatLogRepository _chatLogRepository;
+
         private static readonly JsonSerializerOptions CamelCaseOptions = new()
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
@@ -27,7 +28,6 @@ namespace ShoppingCart.API.Controllers
             _chatLogRepository = chatLogRepository;
         }
 
-        // Non-streaming — kept for any caller that just wants the final text in one response.
         [HttpPost]
         [AllowAnonymous]
         [EnableRateLimiting("chat")]
@@ -46,10 +46,9 @@ namespace ShoppingCart.API.Controllers
             var result = await _chatService.GetReplyAsync(
                 dto.Message, dto.History ?? new List<ChatMessageDto>(), userId);
 
-            return Ok(new ChatResponseDto(result.Reply, result.Products));
+            return Ok(new ChatResponseDto(result.Reply, result.Products, result.CartProposal));
         }
 
-        // Streaming — the live widget uses this so replies render token-by-token.
         [HttpPost("stream")]
         [AllowAnonymous]
         [EnableRateLimiting("chat")]
@@ -57,7 +56,7 @@ namespace ShoppingCart.API.Controllers
         {
             Response.ContentType = "text/event-stream";
             Response.Headers["Cache-Control"] = "no-cache";
-            Response.Headers["X-Accel-Buffering"] = "no"; // ask any reverse proxy not to buffer the stream
+            Response.Headers["X-Accel-Buffering"] = "no";
 
             if (string.IsNullOrWhiteSpace(dto.Message) || dto.Message.Length > 1000)
             {
@@ -85,6 +84,9 @@ namespace ShoppingCart.API.Controllers
                             break;
                         case ChatProductsEvent productsEvt:
                             await WriteSseEventAsync("products", JsonSerializer.Serialize(productsEvt.Products, CamelCaseOptions), cancellationToken);
+                            break;
+                        case ChatCartProposalEvent cartEvt:
+                            await WriteSseEventAsync("cartProposal", JsonSerializer.Serialize(cartEvt.Products, CamelCaseOptions), cancellationToken);
                             break;
                         case ChatDoneEvent:
                             await WriteSseEventAsync("done", "", cancellationToken);
@@ -114,9 +116,6 @@ namespace ShoppingCart.API.Controllers
 
         private async Task WriteSseEventAsync(string eventName, string data, CancellationToken cancellationToken)
         {
-            // Every payload is JSON-encoded as a string (even "products", whose data is
-            // itself a JSON array serialized to a string) so the data: line never contains
-            // a raw newline, which would otherwise break SSE framing.
             var encoded = JsonSerializer.Serialize(data);
             await Response.WriteAsync($"event: {eventName}\n", cancellationToken);
             await Response.WriteAsync($"data: {encoded}\n\n", cancellationToken);

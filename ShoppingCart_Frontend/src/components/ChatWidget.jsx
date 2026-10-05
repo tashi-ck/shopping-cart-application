@@ -141,9 +141,83 @@ function ChatProductCard({ product, onOpen }) {
   );
 }
 
+// A dedicated confirmation card for "add this to my cart" requests — distinct
+// from the regular search-result cards above, since this is specifically the
+// set of items the customer asked to add, pending their explicit click.
+function ChatCartProposal({ products, status, results, onConfirm, onDismiss }) {
+  if (!products?.length || status === "dismissed") return null;
+
+  return (
+    <div className="w-[92%] mt-2 bg-indigo-50/60 border border-indigo-100 rounded-xl p-3 space-y-2">
+      <p className="text-xs font-medium text-indigo-900">
+        Add {products.length} {products.length === 1 ? "item" : "items"} to your cart?
+      </p>
+
+      <div className="space-y-1.5">
+        {products.map((p) => {
+          const result = results?.find((r) => r.productId === p.productId);
+          return (
+            <div key={p.productId} className="flex items-center gap-2 bg-white rounded-lg border border-gray-100 px-2 py-1.5">
+              <div className="w-8 h-8 rounded bg-gray-50 border border-gray-100 overflow-hidden shrink-0 flex items-center justify-center">
+                {p.imageUrl ? (
+                  <img src={p.imageUrl} alt={p.name} className="w-full h-full object-cover" />
+                ) : (
+                  <ImageOff size={12} className="text-gray-300" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-gray-800 truncate">{p.name}</p>
+                <p className="text-[11px] text-gray-400">${Number(p.price).toFixed(2)}</p>
+              </div>
+              {result &&
+                (result.success ? (
+                  <Check size={14} className="text-green-600 shrink-0" />
+                ) : (
+                  <span className="text-[10px] text-red-600 shrink-0">Failed</span>
+                ))}
+            </div>
+          );
+        })}
+      </div>
+
+      {status === "pending" && (
+        <div className="flex gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="flex-1 flex items-center justify-center gap-1.5 text-xs font-medium bg-indigo-600 text-white rounded-lg py-1.5 hover:bg-indigo-700 transition"
+          >
+            <ShoppingCart size={12} /> Add {products.length === 1 ? "item" : "all"} to cart
+          </button>
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="text-xs font-medium text-gray-500 hover:text-gray-700 px-3 py-1.5"
+          >
+            No thanks
+          </button>
+        </div>
+      )}
+
+      {status === "processing" && (
+        <div className="flex items-center justify-center gap-1.5 text-xs text-gray-500 pt-1">
+          <Loader2 size={12} className="animate-spin" /> Adding to cart...
+        </div>
+      )}
+
+      {status === "done" && (
+        <p className="text-xs font-medium pt-1 text-green-700">
+          {results?.every((r) => r.success) ? "Added to your cart!" : "Some items couldn't be added — check your cart."}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function ChatWidget() {
   const navigate = useNavigate();
   const { isAuthenticated, isLoading: authLoading, getAccessTokenSilently } = useAuth0();
+  const { addItem } = useCart();
 
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState(() => {
@@ -202,6 +276,17 @@ export default function ChatWidget() {
     });
   };
 
+  // Like updateLastAssistantMessage but for an arbitrary (possibly older)
+  // message — used by cart-proposal confirm/dismiss, which can happen well
+  // after the message stopped being "last".
+  const updateMessageAt = (index, updater) => {
+    setMessages((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], ...updater(next[index]) };
+      return next;
+    });
+  };
+
   const handleSseEvent = (rawEvent) => {
     const lines = rawEvent.split("\n");
     const eventLine = lines.find((l) => l.startsWith("event: "));
@@ -217,9 +302,6 @@ export default function ChatWidget() {
     }
 
     if (eventName === "chunk") {
-      // Real text has started arriving, so any "Searching..." style status no
-      // longer applies — the bot has moved from "looking something up" to
-      // "writing the answer".
       updateLastAssistantMessage((last) => ({
         content: (last.content || "") + data,
         statusLabel: null,
@@ -232,6 +314,12 @@ export default function ChatWidget() {
       } catch {
         // malformed product payload — the text reply still shows fine without it
       }
+    } else if (eventName === "cartProposal") {
+      try {
+        updateLastAssistantMessage(() => ({ cartProposal: JSON.parse(data), cartProposalStatus: "pending" }));
+      } catch {
+        // malformed payload — just skip showing the proposal card
+      }
     } else if (eventName === "error") {
       updateLastAssistantMessage(() => ({ content: data, statusLabel: null }));
     }
@@ -243,7 +331,7 @@ export default function ChatWidget() {
     setMessages([
       ...baseMessages,
       { role: "user", content: userText },
-      { role: "assistant", content: "", products: [], statusLabel: null },
+      { role: "assistant", content: "", products: [], statusLabel: null, cartProposal: null, cartProposalStatus: null },
     ]);
     setSending(true);
 
@@ -339,6 +427,27 @@ export default function ChatWidget() {
 
     const baseMessages = messages.slice(0, userIndex);
     streamFrom(baseMessages, userMessage.content);
+  };
+
+  // Real click → real cart mutation, using the same CartContext every other
+  // "add to cart" button in the app uses. The bot never calls this itself.
+  const confirmCartProposal = async (index) => {
+    const message = messages[index];
+    if (!message?.cartProposal?.length || message.cartProposalStatus !== "pending") return;
+
+    updateMessageAt(index, () => ({ cartProposalStatus: "processing" }));
+
+    const results = [];
+    for (const product of message.cartProposal) {
+      const result = await addItem(product, 1);
+      results.push({ productId: product.productId, success: result.success, message: result.message });
+    }
+
+    updateMessageAt(index, () => ({ cartProposalStatus: "done", cartProposalResults: results }));
+  };
+
+  const dismissCartProposal = (index) => {
+    updateMessageAt(index, () => ({ cartProposalStatus: "dismissed" }));
   };
 
   const showSuggestions = messages.length === 1 && !sending;
@@ -466,6 +575,16 @@ export default function ChatWidget() {
                         </button>
                       )}
                     </div>
+                  )}
+
+                  {m.cartProposal?.length > 0 && (
+                    <ChatCartProposal
+                      products={m.cartProposal}
+                      status={m.cartProposalStatus}
+                      results={m.cartProposalResults}
+                      onConfirm={() => confirmCartProposal(i)}
+                      onDismiss={() => dismissCartProposal(i)}
+                    />
                   )}
 
                   {m.products?.length > 0 && (

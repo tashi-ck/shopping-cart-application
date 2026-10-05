@@ -58,6 +58,7 @@ namespace ShoppingCart.Infrastructure.Services
         public async Task<ChatReplyResult> GetReplyAsync(string message, List<ChatMessageDto> history, int? userId = null)
         {
             var surfacedProducts = new List<ChatProductDto>();
+            var cartProposal = new List<ChatProductDto>();
 
             try
             {
@@ -102,7 +103,10 @@ namespace ShoppingCart.Infrastructure.Services
                         var finalReply = string.IsNullOrWhiteSpace(reply) ? FallbackText() : reply.Trim();
                         await LogChatAsync(userId, message, finalReply);
 
-                        return new ChatReplyResult(finalReply, surfacedProducts.Take(MaxCardsPerReply).ToList());
+                        return new ChatReplyResult(
+                            finalReply,
+                            surfacedProducts.Take(MaxCardsPerReply).ToList(),
+                            cartProposal.Take(MaxCardsPerReply).ToList());
                     }
 
                     string? assistantText = assistantMessage.TryGetProperty("content", out var ac) && ac.ValueKind == JsonValueKind.String
@@ -118,21 +122,21 @@ namespace ShoppingCart.Infrastructure.Services
                         var name = fn.GetProperty("name").GetString() ?? "";
                         var argsJson = fn.GetProperty("arguments").GetString() ?? "{}";
 
-                        var result = await ExecuteToolAsync(name, argsJson, userId, surfacedProducts);
+                        var result = await ExecuteToolAsync(name, argsJson, userId, surfacedProducts, cartProposal);
                         messages.Add(new { role = "tool", tool_call_id = callId, content = result });
                     }
                 }
 
                 var fallback = FallbackText();
                 await LogChatAsync(userId, message, fallback);
-                return new ChatReplyResult(fallback, new List<ChatProductDto>());
+                return new ChatReplyResult(fallback, surfacedProducts, cartProposal);
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Chatbot request failed, returning fallback reply: {ex.Message}");
                 var fallback = FallbackText();
                 await LogChatAsync(userId, message, fallback);
-                return new ChatReplyResult(fallback, new List<ChatProductDto>());
+                return new ChatReplyResult(fallback, surfacedProducts, cartProposal);
             }
         }
 
@@ -152,10 +156,8 @@ namespace ShoppingCart.Infrastructure.Services
 
             var tools = BuildToolDefinitions(isLoggedIn);
             var surfacedProducts = new List<ChatProductDto>();
+            var cartProposal = new List<ChatProductDto>();
 
-            // Note: this method intentionally has no surrounding try/catch — C# iterators
-            // can't yield inside a try block that has a catch clause. Exceptions bubble up
-            // to the controller, which wraps the `await foreach` instead.
             for (var round = 0; round < MaxToolRounds; round++)
             {
                 var payload = new Dictionary<string, object>
@@ -250,16 +252,18 @@ namespace ShoppingCart.Infrastructure.Services
                     {
                         yield return new ChatStatusEvent(GetToolStatusLabel(call.Name ?? ""));
 
-                        var result = await ExecuteToolAsync(call.Name ?? "", call.Args.ToString(), userId, surfacedProducts);
+                        var result = await ExecuteToolAsync(call.Name ?? "", call.Args.ToString(), userId, surfacedProducts, cartProposal);
                         messages.Add(new { role = "tool", tool_call_id = call.Id, content = result });
                     }
 
                     continue; // next round, now with tool results in context
                 }
 
-                // No more tools requested — what streamed this round is the final answer.
                 var finalReply = contentBuilder.Length > 0 ? contentBuilder.ToString() : FallbackText();
                 await LogChatAsync(userId, message, finalReply);
+
+                if (cartProposal.Count > 0)
+                    yield return new ChatCartProposalEvent(cartProposal.Take(MaxCardsPerReply).ToList());
 
                 if (surfacedProducts.Count > 0)
                     yield return new ChatProductsEvent(surfacedProducts.Take(MaxCardsPerReply).ToList());
@@ -338,6 +342,29 @@ namespace ShoppingCart.Infrastructure.Services
                     type = "function",
                     function = new
                     {
+                        name = "propose_add_to_cart",
+                        description = "Show the customer a confirmation card to add one or more specific products to their cart. Use whenever they ask to add something (e.g. 'add the first two', 'add that to my cart', 'add all of these'). This does NOT add anything by itself — the customer must click a button on the card to actually add the items, so never say the items have already been added. If you don't already know the exact productId for what they mean, call search_products first to find it.",
+                        parameters = new
+                        {
+                            type = "object",
+                            properties = new
+                            {
+                                productIds = new
+                                {
+                                    type = "array",
+                                    items = new { type = "integer" },
+                                    description = "The productId(s) of the exact products to propose adding, in the order the customer wants them."
+                                }
+                            },
+                            required = new[] { "productIds" }
+                        }
+                    }
+                },
+                new
+                {
+                    type = "function",
+                    function = new
+                    {
                         name = "list_categories",
                         description = "List the store's product categories.",
                         parameters = new { type = "object", properties = new { }, required = Array.Empty<string>() }
@@ -379,7 +406,8 @@ namespace ShoppingCart.Infrastructure.Services
 
         // ==================== Tool execution ====================
 
-        private async Task<string> ExecuteToolAsync(string name, string argsJson, int? userId, List<ChatProductDto> surfaced)
+        private async Task<string> ExecuteToolAsync(
+            string name, string argsJson, int? userId, List<ChatProductDto> surfaced, List<ChatProductDto> cartProposal)
         {
             try
             {
@@ -396,6 +424,9 @@ namespace ShoppingCart.Infrastructure.Services
 
                     case "get_product_reviews":
                         return await GetProductReviewsAsync(args);
+
+                    case "propose_add_to_cart":
+                        return await ProposeAddToCartAsync(args, cartProposal);
 
                     case "list_categories":
                         {
@@ -528,6 +559,59 @@ namespace ShoppingCart.Infrastructure.Services
                 : JsonSerializer.Serialize(new { averageRating = summary.AverageRating, reviewCount = summary.ReviewCount });
         }
 
+        // Fetches each requested product fresh from the DB — this is what prevents
+        // the model from proposing a hallucinated product, price, or ID: whatever
+        // ends up in the confirmation card is always real, current catalog data.
+        private async Task<string> ProposeAddToCartAsync(JsonElement args, List<ChatProductDto> cartProposal)
+        {
+            if (!args.TryGetProperty("productIds", out var idsProp) || idsProp.ValueKind != JsonValueKind.Array)
+                return JsonSerializer.Serialize(new { error = "productIds must be a non-empty array of integers." });
+
+            var requestedIds = idsProp.EnumerateArray()
+                .Where(e => e.ValueKind == JsonValueKind.Number)
+                .Select(e => e.GetInt32())
+                .Distinct()
+                .ToList();
+
+            if (requestedIds.Count == 0)
+                return JsonSerializer.Serialize(new { error = "No valid product IDs were provided." });
+
+            var added = new List<object>();
+            var skipped = new List<object>();
+
+            foreach (var id in requestedIds)
+            {
+                var product = await _productService.GetProductAsync(id);
+
+                if (product is null || !product.IsActive)
+                {
+                    skipped.Add(new { productId = id, reason = "not found" });
+                    continue;
+                }
+
+                if (product.StockQuantity <= 0)
+                {
+                    skipped.Add(new { productId = id, name = product.Name, reason = "out of stock" });
+                    continue;
+                }
+
+                AddSurfaced(cartProposal, new ChatProductDto(
+                    product.ProductId, product.Name, product.CategoryName, product.Price, product.StockQuantity, product.ImageUrl));
+
+                added.Add(new { productId = product.ProductId, name = product.Name, price = product.Price });
+            }
+
+            if (added.Count == 0)
+                return JsonSerializer.Serialize(new { message = "None of the requested products could be added (not found or out of stock).", skipped });
+
+            return JsonSerializer.Serialize(new
+            {
+                message = "A confirmation card with these items has been shown to the customer. Do NOT say the items were already added — tell them to review and click the button to add them.",
+                proposed = added,
+                skipped
+            });
+        }
+
         private async Task<string> GetRecentOrdersAsync(int userId)
         {
             var orders = (await _orderService.GetOrdersForUserAsync(userId))
@@ -572,11 +656,23 @@ namespace ShoppingCart.Infrastructure.Services
 
         // ==================== Helpers ====================
 
+        private static string GetToolStatusLabel(string toolName) => toolName switch
+        {
+            "search_products" => "Searching products...",
+            "get_similar_products" => "Finding similar products...",
+            "get_product_reviews" => "Checking reviews...",
+            "propose_add_to_cart" => "Preparing your cart...",
+            "list_categories" => "Looking up categories...",
+            "get_recent_orders" => "Checking your orders...",
+            "get_order_status" => "Checking your order...",
+            _ => "Working on it..."
+        };
+
         private async Task LogChatAsync(int? userId, string userMessage, string assistantReply)
         {
             try
             {
-                await _chatLogRepository.CreateAsync(new ChatLog
+                await _chatLogRepository.CreateAsync(new ShoppingCart.Core.Entities.ChatLog
                 {
                     UserId = userId,
                     UserMessage = userMessage,
@@ -585,8 +681,6 @@ namespace ShoppingCart.Infrastructure.Services
             }
             catch (Exception ex)
             {
-                // Same reasoning as every other non-critical side effect in this app:
-                // a logging failure must never surface to the person chatting.
                 Console.WriteLine($"Failed to save chat log: {ex.Message}");
             }
         }
@@ -676,7 +770,11 @@ namespace ShoppingCart.Infrastructure.Services
                   detail. Give a one or two sentence summary, mention the top pick and why, and note if something is low
                   or out of stock.
                 - If nothing matches, say so and suggest a broader search or a related category.
-                - You cannot add items to the cart or place orders. Tell them to open the product and use "Add to cart".
+                - If the customer asks to add a product (or several) to their cart (e.g. "add the first two", "add that
+                  to my cart", "add all of these"), call propose_add_to_cart with the relevant productId(s). If you
+                  don't already know the exact productId for what they mean (e.g. they're referring back to an earlier
+                  search), call search_products again first to find it. NEVER say you've added anything yourself —
+                  propose_add_to_cart only shows a confirmation card; the customer must click it to actually add items.
 
                 {orderRules}
 
@@ -692,18 +790,5 @@ namespace ShoppingCart.Infrastructure.Services
 
         private static string FallbackText() =>
             "Sorry, I'm having trouble answering right now. You can check our Policies page or contact support for help.";
-
-        // Friendly, present-tense labels shown in the UI while each tool runs —
-        // keep these short, they replace the typing-indicator spinner's text.
-        private static string GetToolStatusLabel(string toolName) => toolName switch
-        {
-            "search_products" => "Searching products...",
-            "get_similar_products" => "Finding similar products...",
-            "get_product_reviews" => "Checking reviews...",
-            "list_categories" => "Looking up categories...",
-            "get_recent_orders" => "Checking your orders...",
-            "get_order_status" => "Checking your order...",
-            _ => "Working on it..."
-        };
     }
 }

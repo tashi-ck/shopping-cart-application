@@ -80,6 +80,9 @@ namespace ShoppingCart.API.Controllers
                         case ChatTextChunkEvent chunk:
                             await WriteSseEventAsync("chunk", chunk.Text, cancellationToken);
                             break;
+                        case ChatStatusEvent status:
+                            await WriteSseEventAsync("status", status.Label, cancellationToken);
+                            break;
                         case ChatProductsEvent productsEvt:
                             await WriteSseEventAsync("products", JsonSerializer.Serialize(productsEvt.Products, CamelCaseOptions), cancellationToken);
                             break;

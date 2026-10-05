@@ -248,6 +248,8 @@ namespace ShoppingCart.Infrastructure.Services
 
                     foreach (var call in orderedCalls)
                     {
+                        yield return new ChatStatusEvent(GetToolStatusLabel(call.Name ?? ""));
+
                         var result = await ExecuteToolAsync(call.Name ?? "", call.Args.ToString(), userId, surfacedProducts);
                         messages.Add(new { role = "tool", tool_call_id = call.Id, content = result });
                     }
@@ -690,5 +692,18 @@ namespace ShoppingCart.Infrastructure.Services
 
         private static string FallbackText() =>
             "Sorry, I'm having trouble answering right now. You can check our Policies page or contact support for help.";
+
+        // Friendly, present-tense labels shown in the UI while each tool runs —
+        // keep these short, they replace the typing-indicator spinner's text.
+        private static string GetToolStatusLabel(string toolName) => toolName switch
+        {
+            "search_products" => "Searching products...",
+            "get_similar_products" => "Finding similar products...",
+            "get_product_reviews" => "Checking reviews...",
+            "list_categories" => "Looking up categories...",
+            "get_recent_orders" => "Checking your orders...",
+            "get_order_status" => "Checking your order...",
+            _ => "Working on it..."
+        };
     }
 }

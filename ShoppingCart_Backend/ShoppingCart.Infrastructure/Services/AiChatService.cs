@@ -30,11 +30,17 @@ namespace ShoppingCart.Infrastructure.Services
         private const int MaxToolRounds = 4;
         private const int MaxProductsPerSearch = 5;
         private const int MaxCardsPerReply = 5;
-
-        // Lowered from 0.3 — a shopping assistant quoting real prices/stock/policy
-        // text should be as deterministic and literal as possible; a little less
-        // "creative" sampling noticeably cuts down on paraphrased/invented details.
         private const double Temperature = 0.15;
+
+        // Topic drift: counted over the trailing user turns (including the
+        // current message), walking backward until an on-topic one is hit.
+        private const int OffTopicHistoryWindow = 6;
+        private const int OffTopicNudgeThreshold = 2;  // 2nd consecutive off-topic turn
+        private const int OffTopicCapThreshold = 3;    // 3rd+ — bypass the LLM entirely
+
+        private const string OffTopicCapMessage =
+            "I can only help with shopping here — products, orders, and our policies. " +
+            "I'm not able to help with that, but let me know if there's anything store-related I can help you find!";
 
         public AiChatService(
             HttpClient httpClient,
@@ -60,39 +66,42 @@ namespace ShoppingCart.Infrastructure.Services
 
         // ==================== Public entry points ====================
 
-        public async Task<ChatReplyResult> GetReplyAsync(string message, List<ChatMessageDto> history, int? userId = null)
-        {
-            var isLoggedIn = userId.HasValue;
-            var systemPrompt = await BuildSystemPromptAsync(isLoggedIn, policyIds: null);
-            var tools = BuildToolDefinitions(isLoggedIn);
+        public Task<ChatReplyResult> GetReplyAsync(string message, List<ChatMessageDto> history, int? userId = null) =>
+            RunNonStreamingAsync(
+                isLoggedIn: userId.HasValue, policyIds: null, message, history,
+                userId, scopeCategoryIds: null, logConversation: true);
 
-            return await RunNonStreamingAsync(systemPrompt, tools, message, history, userId, scopeCategoryIds: null, logConversation: true);
-        }
-
-        public async Task<ChatReplyResult> GetTestReplyAsync(
-            string message, List<ChatMessageDto> history, List<int>? policyIds, List<int>? categoryIds)
-        {
-            // Sandbox always runs as "anonymous" (no order tools) — the admin panel
-            // is for QA'ing policies/products, not for impersonating a customer's
-            // order history, and never writes to ChatLogs so it doesn't pollute
-            // real-customer analytics.
-            var systemPrompt = await BuildSystemPromptAsync(isLoggedIn: false, policyIds);
-            var tools = BuildToolDefinitions(isLoggedIn: false);
-
-            return await RunNonStreamingAsync(systemPrompt, tools, message, history, userId: null, categoryIds, logConversation: false);
-        }
+        public Task<ChatReplyResult> GetTestReplyAsync(
+            string message, List<ChatMessageDto> history, List<int>? policyIds, List<int>? categoryIds) =>
+            RunNonStreamingAsync(
+                isLoggedIn: false, policyIds, message, history,
+                userId: null, categoryIds, logConversation: false);
 
         // ==================== Shared non-streaming loop ====================
 
         private async Task<ChatReplyResult> RunNonStreamingAsync(
-            string systemPrompt, object[] tools, string message, List<ChatMessageDto> history,
+            bool isLoggedIn, List<int>? policyIds, string message, List<ChatMessageDto> history,
             int? userId, List<int>? scopeCategoryIds, bool logConversation)
         {
             var surfacedProducts = new List<ChatProductDto>();
             var cartProposal = new List<ChatProductDto>();
 
+            var offTopicStreak = ComputeOffTopicStreak(history, message);
+            if (offTopicStreak >= OffTopicCapThreshold)
+            {
+                // Deliberately skip the LLM entirely here — a repeated off-topic
+                // user doesn't need a fresh, varied reply, just a consistent,
+                // free, instant redirect.
+                if (logConversation) await LogChatAsync(userId, message, OffTopicCapMessage);
+                return new ChatReplyResult(OffTopicCapMessage, surfacedProducts, cartProposal);
+            }
+
             try
             {
+                var systemPrompt = await BuildSystemPromptAsync(
+                    isLoggedIn, policyIds, nudgeOffTopic: offTopicStreak == OffTopicNudgeThreshold);
+                var tools = BuildToolDefinitions(isLoggedIn);
+
                 var messages = new List<object> { new { role = "system", content = systemPrompt } };
                 foreach (var turn in history.TakeLast(MaxHistoryMessages))
                     messages.Add(new { role = turn.Role == "assistant" ? "assistant" : "user", content = turn.Content });
@@ -172,8 +181,18 @@ namespace ShoppingCart.Infrastructure.Services
             string message, List<ChatMessageDto> history, int? userId,
             [EnumeratorCancellation] CancellationToken cancellationToken)
         {
+            var offTopicStreak = ComputeOffTopicStreak(history, message);
+            if (offTopicStreak >= OffTopicCapThreshold)
+            {
+                yield return new ChatTextChunkEvent(OffTopicCapMessage);
+                await LogChatAsync(userId, message, OffTopicCapMessage);
+                yield return new ChatDoneEvent();
+                yield break;
+            }
+
             var isLoggedIn = userId.HasValue;
-            var systemPrompt = await BuildSystemPromptAsync(isLoggedIn, policyIds: null);
+            var systemPrompt = await BuildSystemPromptAsync(
+                isLoggedIn, policyIds: null, nudgeOffTopic: offTopicStreak == OffTopicNudgeThreshold);
 
             var messages = new List<object> { new { role = "system", content = systemPrompt } };
             foreach (var turn in history.TakeLast(MaxHistoryMessages))
@@ -302,6 +321,28 @@ namespace ShoppingCart.Infrastructure.Services
             yield return new ChatTextChunkEvent(fallback);
             await LogChatAsync(userId, message, fallback);
             yield return new ChatDoneEvent();
+        }
+
+        // ==================== Topic drift ====================
+
+        // Walks backward from the current message through the user's prior turns
+        // and counts how many consecutive ones look off-topic. One on-topic
+        // message anywhere in that walk stops the count — the streak resets.
+        private static int ComputeOffTopicStreak(List<ChatMessageDto> history, string currentMessage)
+        {
+            var userTurns = history
+                .Where(m => string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase))
+                .Select(m => m.Content)
+                .ToList();
+            userTurns.Add(currentMessage);
+
+            var streak = 0;
+            for (var i = userTurns.Count - 1; i >= 0 && streak < OffTopicHistoryWindow; i--)
+            {
+                if (!ChatTopicFilter.IsLikelyOffTopic(userTurns[i])) break;
+                streak++;
+            }
+            return streak;
         }
 
         // ==================== Tool definitions ====================
@@ -776,7 +817,7 @@ namespace ShoppingCart.Infrastructure.Services
 
         // ==================== Prompt ====================
 
-        private async Task<string> BuildSystemPromptAsync(bool isLoggedIn, List<int>? policyIds)
+        private async Task<string> BuildSystemPromptAsync(bool isLoggedIn, List<int>? policyIds, bool nudgeOffTopic = false)
         {
             var allPolicies = await _policyService.GetAllPoliciesAsync();
             var policies = policyIds is { Count: > 0 }
@@ -801,6 +842,16 @@ namespace ShoppingCart.Infrastructure.Services
                   ORDERS: The customer is NOT logged in. You cannot look up any order. If they ask about a specific order or
                   "my orders", ask them to log in first, then ask again. Guest orders are tracked via the confirmation email.
                   """;
+
+            var topicDriftSection = nudgeOffTopic
+                ? """
+
+                  TOPIC DRIFT: The customer has asked unrelated, non-shopping questions more than once in a row.
+                  In THIS reply specifically, briefly and politely note in one short sentence that you can only
+                  help with shopping, orders, and store policies here — then stop. Do not answer the unrelated
+                  request even partially, and do not repeat this reminder again if their next message is on-topic.
+                  """
+                : "";
 
             return $"""
                 You are a helpful shopping assistant for an online store called "Go Shopping".
@@ -839,6 +890,7 @@ namespace ShoppingCart.Infrastructure.Services
                 - Do not answer questions about topics outside shopping, these policies, and these products — including
                   general knowledge, unrelated advice, or other companies — even if you happen to know the answer.
                   Politely redirect to what you can help with instead.
+                {topicDriftSection}
 
                 Keep answers short, friendly, and to the point (2-4 sentences unless more detail is clearly needed).
                 Never discuss other customers or their orders. Do not provide legal, medical, or financial advice.

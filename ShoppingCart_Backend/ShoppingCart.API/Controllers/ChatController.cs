@@ -46,7 +46,7 @@ namespace ShoppingCart.API.Controllers
             var result = await _chatService.GetReplyAsync(
                 dto.Message, dto.History ?? new List<ChatMessageDto>(), userId);
 
-            return Ok(new ChatResponseDto(result.Reply, result.Products, result.CartProposal));
+            return Ok(new ChatResponseDto(result.Reply, result.Products, result.CartProposal, result.ChatLogId));
         }
 
         [HttpPost("stream")]
@@ -88,6 +88,9 @@ namespace ShoppingCart.API.Controllers
                         case ChatCartProposalEvent cartEvt:
                             await WriteSseEventAsync("cartProposal", JsonSerializer.Serialize(cartEvt.Products, CamelCaseOptions), cancellationToken);
                             break;
+                        case ChatLogIdEvent logIdEvt:
+                            await WriteSseEventAsync("chatLogId", logIdEvt.ChatLogId.ToString(), cancellationToken);
+                            break;
                         case ChatDoneEvent:
                             await WriteSseEventAsync("done", "", cancellationToken);
                             break;
@@ -106,9 +109,17 @@ namespace ShoppingCart.API.Controllers
             }
         }
 
-        // Admin QA sandbox — chat against a restricted subset of policies/categories
-        // before a real change goes live. Non-streaming for simplicity, and never
-        // logged to ChatLogs.
+        // Anyone (including guests) can submit feedback on a reply they received —
+        // there's no sensitive data in a thumbs up/down, and requiring login would
+        // just mean guest conversations (a large share of traffic) get no signal at all.
+        [HttpPost("{chatLogId}/feedback")]
+        [AllowAnonymous]
+        public async Task<IActionResult> SubmitFeedback(int chatLogId, [FromBody] SubmitChatFeedbackDto dto)
+        {
+            var updated = await _chatLogRepository.SetFeedbackAsync(chatLogId, dto.Helpful);
+            return updated ? NoContent() : NotFound();
+        }
+
         [HttpPost("admin/test")]
         [Authorize(Roles = "Admin")]
         public async Task<IActionResult> TestMessage([FromBody] ChatTestRequestDto dto)
@@ -122,7 +133,7 @@ namespace ShoppingCart.API.Controllers
             var result = await _chatService.GetTestReplyAsync(
                 dto.Message, dto.History ?? new List<ChatMessageDto>(), dto.PolicyIds, dto.CategoryIds);
 
-            return Ok(new ChatResponseDto(result.Reply, result.Products, result.CartProposal));
+            return Ok(new ChatResponseDto(result.Reply, result.Products, result.CartProposal, result.ChatLogId));
         }
 
         [HttpGet("admin/logs")]
@@ -130,7 +141,8 @@ namespace ShoppingCart.API.Controllers
         public async Task<IActionResult> GetChatLogs([FromQuery] int limit = 50)
         {
             var logs = await _chatLogRepository.GetRecentAsync(limit);
-            return Ok(logs.Select(l => new ChatLogDto(l.ChatLogId, l.UserEmail, l.UserMessage, l.AssistantReply, l.CreatedAt)));
+            return Ok(logs.Select(l => new ChatLogDto(
+                l.ChatLogId, l.UserEmail, l.UserMessage, l.AssistantReply, l.CreatedAt, l.Feedback, l.FeedbackAt)));
         }
 
         private async Task WriteSseEventAsync(string eventName, string data, CancellationToken cancellationToken)

@@ -13,5 +13,7 @@ namespace ShoppingCart.Core.Entities
         public string UserMessage { get; set; } = string.Empty;
         public string AssistantReply { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
+        public bool? Feedback { get; set; } // true = helpful, false = not helpful, null = none given
+        public DateTime? FeedbackAt { get; set; }
     }
 }

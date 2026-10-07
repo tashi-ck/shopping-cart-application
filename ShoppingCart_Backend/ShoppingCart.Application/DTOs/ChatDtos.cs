@@ -12,9 +12,6 @@ namespace ShoppingCart.Application.DTOs
 
         public record SendChatMessageDto(string Message, List<ChatMessageDto>? History);
 
-        // Admin QA sandbox: an optional subset of policies and/or categories to
-        // restrict the bot to, so a change can be verified before it's live.
-        // Null/empty on either list means "no restriction" (same as production).
         public record ChatTestRequestDto(
             string Message, List<ChatMessageDto>? History,
             List<int>? PolicyIds, List<int>? CategoryIds);
@@ -23,10 +20,16 @@ namespace ShoppingCart.Application.DTOs
             int ProductId, string Name, string CategoryName,
             decimal Price, int StockQuantity, string? ImageUrl);
 
-        public record ChatReplyResult(string Reply, List<ChatProductDto> Products, List<ChatProductDto> CartProposal);
+        // ChatLogId is null only when logging itself failed (see AiChatService's
+        // fail-open LogChatAsync) — feedback simply can't be attached in that rare case.
+        public record ChatReplyResult(string Reply, List<ChatProductDto> Products, List<ChatProductDto> CartProposal, int? ChatLogId);
 
-        public record ChatResponseDto(string Reply, List<ChatProductDto> Products, List<ChatProductDto> CartProposal);
+        public record ChatResponseDto(string Reply, List<ChatProductDto> Products, List<ChatProductDto> CartProposal, int? ChatLogId);
 
-        public record ChatLogDto(int ChatLogId, string? UserEmail, string UserMessage, string AssistantReply, DateTime CreatedAt);
+        public record ChatLogDto(
+            int ChatLogId, string? UserEmail, string UserMessage, string AssistantReply,
+            DateTime CreatedAt, bool? Feedback, DateTime? FeedbackAt);
+
+        public record SubmitChatFeedbackDto(bool Helpful);
     }
 }

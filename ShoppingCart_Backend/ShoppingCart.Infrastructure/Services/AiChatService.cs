@@ -32,11 +32,9 @@ namespace ShoppingCart.Infrastructure.Services
         private const int MaxCardsPerReply = 5;
         private const double Temperature = 0.15;
 
-        // Topic drift: counted over the trailing user turns (including the
-        // current message), walking backward until an on-topic one is hit.
         private const int OffTopicHistoryWindow = 6;
-        private const int OffTopicNudgeThreshold = 2;  // 2nd consecutive off-topic turn
-        private const int OffTopicCapThreshold = 3;    // 3rd+ — bypass the LLM entirely
+        private const int OffTopicNudgeThreshold = 2;
+        private const int OffTopicCapThreshold = 3;
 
         private const string OffTopicCapMessage =
             "I can only help with shopping here — products, orders, and our policies. " +
@@ -89,11 +87,8 @@ namespace ShoppingCart.Infrastructure.Services
             var offTopicStreak = ComputeOffTopicStreak(history, message);
             if (offTopicStreak >= OffTopicCapThreshold)
             {
-                // Deliberately skip the LLM entirely here — a repeated off-topic
-                // user doesn't need a fresh, varied reply, just a consistent,
-                // free, instant redirect.
-                if (logConversation) await LogChatAsync(userId, message, OffTopicCapMessage);
-                return new ChatReplyResult(OffTopicCapMessage, surfacedProducts, cartProposal);
+                int? capLogId = logConversation ? await LogChatAsync(userId, message, OffTopicCapMessage) : null;
+                return new ChatReplyResult(OffTopicCapMessage, surfacedProducts, cartProposal, capLogId);
             }
 
             try
@@ -136,12 +131,13 @@ namespace ShoppingCart.Infrastructure.Services
                             : null;
 
                         var finalReply = string.IsNullOrWhiteSpace(reply) ? FallbackText() : reply.Trim();
-                        if (logConversation) await LogChatAsync(userId, message, finalReply);
+                        int? logId = logConversation ? await LogChatAsync(userId, message, finalReply) : null;
 
                         return new ChatReplyResult(
                             finalReply,
                             surfacedProducts.Take(MaxCardsPerReply).ToList(),
-                            cartProposal.Take(MaxCardsPerReply).ToList());
+                            cartProposal.Take(MaxCardsPerReply).ToList(),
+                            logId);
                     }
 
                     string? assistantText = assistantMessage.TryGetProperty("content", out var ac) && ac.ValueKind == JsonValueKind.String
@@ -163,15 +159,15 @@ namespace ShoppingCart.Infrastructure.Services
                 }
 
                 var fallback = FallbackText();
-                if (logConversation) await LogChatAsync(userId, message, fallback);
-                return new ChatReplyResult(fallback, surfacedProducts, cartProposal);
+                int? fallbackLogId = logConversation ? await LogChatAsync(userId, message, fallback) : null;
+                return new ChatReplyResult(fallback, surfacedProducts, cartProposal, fallbackLogId);
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Chatbot request failed, returning fallback reply: {ex.Message}");
                 var fallback = FallbackText();
-                if (logConversation) await LogChatAsync(userId, message, fallback);
-                return new ChatReplyResult(fallback, surfacedProducts, cartProposal);
+                int? errorLogId = logConversation ? await LogChatAsync(userId, message, fallback) : null;
+                return new ChatReplyResult(fallback, surfacedProducts, cartProposal, errorLogId);
             }
         }
 
@@ -185,7 +181,8 @@ namespace ShoppingCart.Infrastructure.Services
             if (offTopicStreak >= OffTopicCapThreshold)
             {
                 yield return new ChatTextChunkEvent(OffTopicCapMessage);
-                await LogChatAsync(userId, message, OffTopicCapMessage);
+                var capLogId = await LogChatAsync(userId, message, OffTopicCapMessage);
+                if (capLogId.HasValue) yield return new ChatLogIdEvent(capLogId.Value);
                 yield return new ChatDoneEvent();
                 yield break;
             }
@@ -305,7 +302,7 @@ namespace ShoppingCart.Infrastructure.Services
                 }
 
                 var finalReply = contentBuilder.Length > 0 ? contentBuilder.ToString() : FallbackText();
-                await LogChatAsync(userId, message, finalReply);
+                var logId = await LogChatAsync(userId, message, finalReply);
 
                 if (cartProposal.Count > 0)
                     yield return new ChatCartProposalEvent(cartProposal.Take(MaxCardsPerReply).ToList());
@@ -313,21 +310,22 @@ namespace ShoppingCart.Infrastructure.Services
                 if (surfacedProducts.Count > 0)
                     yield return new ChatProductsEvent(surfacedProducts.Take(MaxCardsPerReply).ToList());
 
+                if (logId.HasValue)
+                    yield return new ChatLogIdEvent(logId.Value);
+
                 yield return new ChatDoneEvent();
                 yield break;
             }
 
             var fallback = FallbackText();
             yield return new ChatTextChunkEvent(fallback);
-            await LogChatAsync(userId, message, fallback);
+            var fallbackLogId = await LogChatAsync(userId, message, fallback);
+            if (fallbackLogId.HasValue) yield return new ChatLogIdEvent(fallbackLogId.Value);
             yield return new ChatDoneEvent();
         }
 
         // ==================== Topic drift ====================
 
-        // Walks backward from the current message through the user's prior turns
-        // and counts how many consecutive ones look off-topic. One on-topic
-        // message anywhere in that walk stops the count — the streak resets.
         private static int ComputeOffTopicStreak(List<ChatMessageDto> history, string currentMessage)
         {
             var userTurns = history
@@ -755,20 +753,26 @@ namespace ShoppingCart.Infrastructure.Services
             _ => "Working on it..."
         };
 
-        private async Task LogChatAsync(int? userId, string userMessage, string assistantReply)
+        // Fail-open, same as every other non-critical side effect in this app —
+        // but now returns the new row's ID so callers can attach feedback to it.
+        // Returns null if logging itself failed, meaning no feedback can be
+        // recorded for that particular exchange.
+        private async Task<int?> LogChatAsync(int? userId, string userMessage, string assistantReply)
         {
             try
             {
-                await _chatLogRepository.CreateAsync(new ShoppingCart.Core.Entities.ChatLog
+                var created = await _chatLogRepository.CreateAsync(new ShoppingCart.Core.Entities.ChatLog
                 {
                     UserId = userId,
                     UserMessage = userMessage,
                     AssistantReply = assistantReply
                 });
+                return created.ChatLogId;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Failed to save chat log: {ex.Message}");
+                return null;
             }
         }
 

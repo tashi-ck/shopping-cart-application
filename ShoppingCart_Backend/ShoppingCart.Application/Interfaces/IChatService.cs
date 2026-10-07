@@ -15,8 +15,6 @@ namespace ShoppingCart.Application.Interfaces
         IAsyncEnumerable<ChatStreamEvent> StreamReplyAsync(
             string message, List<ChatMessageDto> history, int? userId, CancellationToken cancellationToken);
 
-        // Admin QA sandbox — same brain, optionally restricted to a subset of
-        // policies/categories, and never written to ChatLogs.
         Task<ChatReplyResult> GetTestReplyAsync(
             string message, List<ChatMessageDto> history, List<int>? policyIds, List<int>? categoryIds);
     }

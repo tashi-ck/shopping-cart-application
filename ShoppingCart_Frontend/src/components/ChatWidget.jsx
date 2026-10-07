@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth0 } from "@auth0/auth0-react";
 import ReactMarkdown from "react-markdown";
-import { MessageCircle, X, Send, Loader2, Bot, ImageOff, ShoppingCart, Check, RotateCcw, Pencil } from "lucide-react";
+import { MessageCircle, X, Send, Loader2, Bot, ImageOff, ShoppingCart, Check, RotateCcw, Pencil, ThumbsUp, ThumbsDown } from "lucide-react";
 import { useCart } from "../context/CartContext";
+import { submitChatFeedback } from "../api/chatApi";
 
 const GUEST_GREETING = {
   role: "assistant",
@@ -18,9 +19,6 @@ const USER_GREETING = {
 const GUEST_SUGGESTIONS = ["Show me headphones under $100", "What's your return policy?", "Recommend something for working out"];
 const USER_SUGGESTIONS = ["Where is my latest order?", "Show me office gear", "What's your return policy?"];
 
-// sessionStorage (not localStorage): survives a refresh or back/forward within
-// this tab, but clears when the tab closes — so history doesn't grow forever
-// or bleed into a completely separate later visit.
 const STORAGE_KEY = "chatWidgetHistory";
 
 function loadStoredChat() {
@@ -36,14 +34,10 @@ function saveStoredChat(data) {
   try {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   } catch {
-    // Storage can fail (private browsing, quota) — losing persistence
-    // silently is fine, the chat still works for the rest of this session.
+    // Storage can fail (private browsing, quota) — losing persistence silently is fine.
   }
 }
 
-// Markdown elements render with browser-default spacing/bullets by default,
-// which looks oversized inside a small chat bubble — these overrides tighten
-// them to match the bubble's existing text-sm / leading-relaxed styling.
 const markdownComponents = {
   p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
   strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
@@ -59,18 +53,11 @@ const markdownComponents = {
   code: ({ children }) => (
     <code className="bg-black/5 rounded px-1 py-0.5 text-[0.85em] font-mono">{children}</code>
   ),
-  // The LLM's own instructions are plain text, not markdown, so heading syntax
-  // in a reply ("# Shipping") should still read as inline emphasis, not a giant
-  // heading that blows out the chat bubble's layout.
   h1: ({ children }) => <p className="font-semibold mb-2 last:mb-0">{children}</p>,
   h2: ({ children }) => <p className="font-semibold mb-2 last:mb-0">{children}</p>,
   h3: ({ children }) => <p className="font-semibold mb-2 last:mb-0">{children}</p>,
 };
 
-// Renders assistant replies as markdown once finished; shows raw text for the
-// user's own messages (never interpret their input as formatting) and for an
-// assistant message still mid-stream (partial markdown syntax like an unclosed
-// "**" would otherwise flicker/misrender while tokens are still arriving).
 function ChatMessageContent({ message, isStreaming }) {
   if (message.role === "user" || isStreaming) {
     return <span className="whitespace-pre-line">{message.content}</span>;
@@ -79,6 +66,43 @@ function ChatMessageContent({ message, isStreaming }) {
   return (
     <div className="prose-chat">
       <ReactMarkdown components={markdownComponents}>{message.content}</ReactMarkdown>
+    </div>
+  );
+}
+
+// Thumbs up/down shown under a finished assistant reply. Once a choice is
+// made it locks in (no changing your mind, no re-submitting) and shows a
+// quiet "Thanks for the feedback" instead of the buttons.
+function ChatFeedback({ chatLogId, feedback, onSubmit }) {
+  if (!chatLogId) return null;
+
+  if (feedback !== null && feedback !== undefined) {
+    return (
+      <p className="text-[11px] text-gray-400 mt-1">
+        Thanks for the feedback!
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2 mt-1">
+      <span className="text-[11px] text-gray-400">Was this helpful?</span>
+      <button
+        type="button"
+        onClick={() => onSubmit(true)}
+        title="Helpful"
+        className="text-gray-400 hover:text-green-600 transition p-0.5"
+      >
+        <ThumbsUp size={13} />
+      </button>
+      <button
+        type="button"
+        onClick={() => onSubmit(false)}
+        title="Not helpful"
+        className="text-gray-400 hover:text-red-600 transition p-0.5"
+      >
+        <ThumbsDown size={13} />
+      </button>
     </div>
   );
 }
@@ -155,9 +179,6 @@ function ChatProductCard({ product, onOpen }) {
   );
 }
 
-// A dedicated confirmation card for "add this to my cart" requests — distinct
-// from the regular search-result cards above, since this is specifically the
-// set of items the customer asked to add, pending their explicit click.
 function ChatCartProposal({ products, status, results, onConfirm, onDismiss }) {
   if (!products?.length || status === "dismissed") return null;
 
@@ -249,10 +270,6 @@ export default function ChatWidget() {
   const greeting = isAuthenticated ? USER_GREETING : GUEST_GREETING;
   const suggestions = isAuthenticated ? USER_SUGGESTIONS : GUEST_SUGGESTIONS;
 
-  // Runs once Auth0 knows the real login state (true on first load after a
-  // refresh, and again whenever login/logout actually happens). Restores the
-  // saved conversation only if it was saved under the SAME auth state —
-  // otherwise starts fresh, same as the old "reset on auth change" behavior.
   useEffect(() => {
     if (authLoading) return;
 
@@ -266,9 +283,6 @@ export default function ChatWidget() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, isAuthenticated]);
 
-  // Persist after every change, but only once hydration above has run —
-  // otherwise the lazy initial state would immediately overwrite storage
-  // before we've had a chance to read and reconcile it.
   useEffect(() => {
     if (!hydratedRef.current) return;
     saveStoredChat({ isAuthenticated, messages });
@@ -280,10 +294,6 @@ export default function ChatWidget() {
     }
   }, [messages, open, sending]);
 
-  // Keyboard shortcuts: Ctrl/Cmd+K always opens+focuses the chat (reserved
-  // combo, safe even while typing elsewhere); "/" does the same but only
-  // when the person isn't currently typing into some other field, so it
-  // never steals a literal "/" from a search box or form input.
   const isTypingElsewhere = useCallback(() => {
     const el = document.activeElement;
     if (!el) return false;
@@ -300,7 +310,6 @@ export default function ChatWidget() {
 
       e.preventDefault();
       setOpen(true);
-      // Wait a tick for the panel (and its input) to actually mount before focusing.
       requestAnimationFrame(() => inputRef.current?.focus());
     };
 
@@ -327,9 +336,6 @@ export default function ChatWidget() {
     });
   };
 
-  // Like updateLastAssistantMessage but for an arbitrary (possibly older)
-  // message — used by cart-proposal confirm/dismiss, which can happen well
-  // after the message stopped being "last".
   const updateMessageAt = (index, updater) => {
     setMessages((prev) => {
       const next = [...prev];
@@ -353,9 +359,6 @@ export default function ChatWidget() {
     }
 
     if (eventName === "chunk") {
-      // Real text has started arriving, so any "Searching..." style status no
-      // longer applies — the bot has moved from "looking something up" to
-      // "writing the answer".
       updateLastAssistantMessage((last) => ({
         content: (last.content || "") + data,
         statusLabel: null,
@@ -374,22 +377,32 @@ export default function ChatWidget() {
       } catch {
         // malformed payload — just skip showing the proposal card
       }
+    } else if (eventName === "chatLogId") {
+      const id = parseInt(data, 10);
+      if (!Number.isNaN(id)) {
+        updateLastAssistantMessage(() => ({ chatLogId: id }));
+      }
     } else if (eventName === "error") {
       updateLastAssistantMessage(() => ({ content: data, statusLabel: null }));
     }
   };
 
-  // Shared by normal send, edit-resend, and regenerate: streams a reply to
-  // `userText` given everything in `baseMessages` as the conversation so far
-  // (baseMessages must NOT include the new user turn or a placeholder reply —
-  // this function appends both).
   const streamFrom = async (baseMessages, userText) => {
     const priorHistory = baseMessages.slice(1).map((m) => ({ role: m.role, content: m.content }));
 
     setMessages([
       ...baseMessages,
       { role: "user", content: userText },
-      { role: "assistant", content: "", products: [], statusLabel: null, cartProposal: null, cartProposalStatus: null },
+      {
+        role: "assistant",
+        content: "",
+        products: [],
+        statusLabel: null,
+        cartProposal: null,
+        cartProposalStatus: null,
+        chatLogId: null,
+        feedback: null,
+      },
     ]);
     setSending(true);
 
@@ -457,8 +470,6 @@ export default function ChatWidget() {
     send(input);
   };
 
-  // --- Edit: replaces a past user message and drops everything after it,
-  // then re-asks with the edited text. ---
   const startEdit = (index) => {
     if (sending) return;
     setEditingIndex(index);
@@ -479,8 +490,6 @@ export default function ChatWidget() {
     streamFrom(baseMessages, trimmed);
   };
 
-  // --- Regenerate: re-asks the same preceding user message, replacing only
-  // the assistant's reply to it. ---
   const regenerate = (assistantIndex) => {
     if (sending) return;
     const userIndex = assistantIndex - 1;
@@ -491,8 +500,6 @@ export default function ChatWidget() {
     streamFrom(baseMessages, userMessage.content);
   };
 
-  // Real click → real cart mutation, using the same CartContext every other
-  // "add to cart" button in the app uses. The bot never calls this itself.
   const confirmCartProposal = async (index) => {
     const message = messages[index];
     if (!message?.cartProposal?.length || message.cartProposalStatus !== "pending") return;
@@ -512,11 +519,22 @@ export default function ChatWidget() {
     updateMessageAt(index, () => ({ cartProposalStatus: "dismissed" }));
   };
 
+  // Optimistically locks in the choice immediately, then submits in the
+  // background — a failed network call just means the thumbs stay locked
+  // without being recorded server-side, which is an acceptable trade-off
+  // for a low-stakes "nice to have" signal rather than adding retry UI.
+  const submitFeedback = (index, helpful) => {
+    const message = messages[index];
+    if (!message?.chatLogId || message.feedback !== null && message.feedback !== undefined) return;
+
+    updateMessageAt(index, () => ({ feedback: helpful }));
+    submitChatFeedback(message.chatLogId, helpful).catch(() => {
+      // Silent — feedback is a bonus signal, not something worth surfacing an error for.
+    });
+  };
+
   const showSuggestions = messages.length === 1 && !sending;
 
-  // Only the very last exchange gets edit/regenerate controls — editing or
-  // regenerating something mid-conversation would leave later messages
-  // referring to a question/answer that no longer exists.
   const lastUserIndex = [...messages].map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i !== -1).pop();
   const lastAssistantIndex = messages.length - 1;
 
@@ -561,6 +579,8 @@ export default function ChatWidget() {
               const canEdit = m.role === "user" && i === lastUserIndex && !sending && editingIndex === null;
               const canRegenerate =
                 m.role === "assistant" && i === lastAssistantIndex && !sending && !isEmptyPlaceholder && editingIndex === null && i > 0;
+
+              const showFeedback = m.role === "assistant" && !isEmptyPlaceholder && i > 0;
 
               return (
                 <div key={i} className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}>
@@ -619,7 +639,6 @@ export default function ChatWidget() {
                     </div>
                   )}
 
-                  {/* Edit / regenerate controls, shown only under the final exchange */}
                   {!isEditingThis && (canEdit || canRegenerate) && (
                     <div className="mt-1">
                       {canEdit && (
@@ -641,6 +660,14 @@ export default function ChatWidget() {
                         </button>
                       )}
                     </div>
+                  )}
+
+                  {!isEditingThis && showFeedback && (
+                    <ChatFeedback
+                      chatLogId={m.chatLogId}
+                      feedback={m.feedback}
+                      onSubmit={(helpful) => submitFeedback(i, helpful)}
+                    />
                   )}
 
                   {m.cartProposal?.length > 0 && (

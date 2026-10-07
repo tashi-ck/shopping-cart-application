@@ -20,7 +20,7 @@ namespace ShoppingCart.Infrastructure.Repositories
             const string sql = """
             INSERT INTO "ChatLogs" ("UserId", "UserMessage", "AssistantReply", "CreatedAt")
             VALUES (@UserId, @UserMessage, @AssistantReply, NOW())
-            RETURNING "ChatLogId", "UserId", "UserMessage", "AssistantReply", "CreatedAt"
+            RETURNING "ChatLogId", "UserId", "UserMessage", "AssistantReply", "CreatedAt", "Feedback", "FeedbackAt"
             """;
             return await connection.QuerySingleAsync<ChatLog>(sql, log);
         }
@@ -30,13 +30,24 @@ namespace ShoppingCart.Infrastructure.Repositories
             using var connection = _connectionFactory.CreateConnection();
             const string sql = """
             SELECT cl."ChatLogId", cl."UserId", cl."UserMessage", cl."AssistantReply", cl."CreatedAt",
-                   u."Email" AS "UserEmail"
+                   cl."Feedback", cl."FeedbackAt", u."Email" AS "UserEmail"
             FROM "ChatLogs" cl
             LEFT JOIN "Users" u ON u."UserId" = cl."UserId"
             ORDER BY cl."CreatedAt" DESC
             LIMIT @Limit
             """;
             return await connection.QueryAsync<ChatLogWithUser>(sql, new { Limit = limit });
+        }
+
+        public async Task<bool> SetFeedbackAsync(int chatLogId, bool helpful)
+        {
+            using var connection = _connectionFactory.CreateConnection();
+            const string sql = """
+            UPDATE "ChatLogs" SET "Feedback" = @Helpful, "FeedbackAt" = NOW()
+            WHERE "ChatLogId" = @ChatLogId
+            """;
+            var rowsAffected = await connection.ExecuteAsync(sql, new { ChatLogId = chatLogId, Helpful = helpful });
+            return rowsAffected > 0;
         }
     }
 }

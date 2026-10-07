@@ -11,5 +11,9 @@ namespace ShoppingCart.Application.Interfaces
     {
         Task<ChatLog> CreateAsync(ChatLog log);
         Task<IEnumerable<ChatLogWithUser>> GetRecentAsync(int limit);
+
+        // Returns false if no row with that ID exists, so the controller can 404
+        // rather than silently succeeding on a bogus/stale chatLogId.
+        Task<bool> SetFeedbackAsync(int chatLogId, bool helpful);
     }
 }

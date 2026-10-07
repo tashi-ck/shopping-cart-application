@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth0 } from "@auth0/auth0-react";
 import ReactMarkdown from "react-markdown";
@@ -18,6 +18,9 @@ const USER_GREETING = {
 const GUEST_SUGGESTIONS = ["Show me headphones under $100", "What's your return policy?", "Recommend something for working out"];
 const USER_SUGGESTIONS = ["Where is my latest order?", "Show me office gear", "What's your return policy?"];
 
+// sessionStorage (not localStorage): survives a refresh or back/forward within
+// this tab, but clears when the tab closes — so history doesn't grow forever
+// or bleed into a completely separate later visit.
 const STORAGE_KEY = "chatWidgetHistory";
 
 function loadStoredChat() {
@@ -33,10 +36,14 @@ function saveStoredChat(data) {
   try {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   } catch {
-    // Storage can fail (private browsing, quota) — losing persistence silently is fine.
+    // Storage can fail (private browsing, quota) — losing persistence
+    // silently is fine, the chat still works for the rest of this session.
   }
 }
 
+// Markdown elements render with browser-default spacing/bullets by default,
+// which looks oversized inside a small chat bubble — these overrides tighten
+// them to match the bubble's existing text-sm / leading-relaxed styling.
 const markdownComponents = {
   p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
   strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
@@ -52,11 +59,18 @@ const markdownComponents = {
   code: ({ children }) => (
     <code className="bg-black/5 rounded px-1 py-0.5 text-[0.85em] font-mono">{children}</code>
   ),
+  // The LLM's own instructions are plain text, not markdown, so heading syntax
+  // in a reply ("# Shipping") should still read as inline emphasis, not a giant
+  // heading that blows out the chat bubble's layout.
   h1: ({ children }) => <p className="font-semibold mb-2 last:mb-0">{children}</p>,
   h2: ({ children }) => <p className="font-semibold mb-2 last:mb-0">{children}</p>,
   h3: ({ children }) => <p className="font-semibold mb-2 last:mb-0">{children}</p>,
 };
 
+// Renders assistant replies as markdown once finished; shows raw text for the
+// user's own messages (never interpret their input as formatting) and for an
+// assistant message still mid-stream (partial markdown syntax like an unclosed
+// "**" would otherwise flicker/misrender while tokens are still arriving).
 function ChatMessageContent({ message, isStreaming }) {
   if (message.role === "user" || isStreaming) {
     return <span className="whitespace-pre-line">{message.content}</span>;
@@ -230,12 +244,18 @@ export default function ChatWidget() {
   const [editText, setEditText] = useState("");
   const scrollRef = useRef(null);
   const hydratedRef = useRef(false);
+  const inputRef = useRef(null);
 
   const greeting = isAuthenticated ? USER_GREETING : GUEST_GREETING;
   const suggestions = isAuthenticated ? USER_SUGGESTIONS : GUEST_SUGGESTIONS;
 
+  // Runs once Auth0 knows the real login state (true on first load after a
+  // refresh, and again whenever login/logout actually happens). Restores the
+  // saved conversation only if it was saved under the SAME auth state —
+  // otherwise starts fresh, same as the old "reset on auth change" behavior.
   useEffect(() => {
     if (authLoading) return;
+
     const stored = loadStoredChat();
     if (stored && stored.isAuthenticated === isAuthenticated && stored.messages?.length) {
       setMessages(stored.messages);
@@ -246,6 +266,9 @@ export default function ChatWidget() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, isAuthenticated]);
 
+  // Persist after every change, but only once hydration above has run —
+  // otherwise the lazy initial state would immediately overwrite storage
+  // before we've had a chance to read and reconcile it.
   useEffect(() => {
     if (!hydratedRef.current) return;
     saveStoredChat({ isAuthenticated, messages });
@@ -256,6 +279,34 @@ export default function ChatWidget() {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages, open, sending]);
+
+  // Keyboard shortcuts: Ctrl/Cmd+K always opens+focuses the chat (reserved
+  // combo, safe even while typing elsewhere); "/" does the same but only
+  // when the person isn't currently typing into some other field, so it
+  // never steals a literal "/" from a search box or form input.
+  const isTypingElsewhere = useCallback(() => {
+    const el = document.activeElement;
+    if (!el) return false;
+    const tag = el.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const isCmdK = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k";
+      const isSlash = e.key === "/" && !isTypingElsewhere();
+
+      if (!isCmdK && !isSlash) return;
+
+      e.preventDefault();
+      setOpen(true);
+      // Wait a tick for the panel (and its input) to actually mount before focusing.
+      requestAnimationFrame(() => inputRef.current?.focus());
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isTypingElsewhere]);
 
   const openProduct = (productId) => {
     setOpen(false);
@@ -302,6 +353,9 @@ export default function ChatWidget() {
     }
 
     if (eventName === "chunk") {
+      // Real text has started arriving, so any "Searching..." style status no
+      // longer applies — the bot has moved from "looking something up" to
+      // "writing the answer".
       updateLastAssistantMessage((last) => ({
         content: (last.content || "") + data,
         statusLabel: null,
@@ -325,6 +379,10 @@ export default function ChatWidget() {
     }
   };
 
+  // Shared by normal send, edit-resend, and regenerate: streams a reply to
+  // `userText` given everything in `baseMessages` as the conversation so far
+  // (baseMessages must NOT include the new user turn or a placeholder reply —
+  // this function appends both).
   const streamFrom = async (baseMessages, userText) => {
     const priorHistory = baseMessages.slice(1).map((m) => ({ role: m.role, content: m.content }));
 
@@ -399,6 +457,8 @@ export default function ChatWidget() {
     send(input);
   };
 
+  // --- Edit: replaces a past user message and drops everything after it,
+  // then re-asks with the edited text. ---
   const startEdit = (index) => {
     if (sending) return;
     setEditingIndex(index);
@@ -419,6 +479,8 @@ export default function ChatWidget() {
     streamFrom(baseMessages, trimmed);
   };
 
+  // --- Regenerate: re-asks the same preceding user message, replacing only
+  // the assistant's reply to it. ---
   const regenerate = (assistantIndex) => {
     if (sending) return;
     const userIndex = assistantIndex - 1;
@@ -452,6 +514,9 @@ export default function ChatWidget() {
 
   const showSuggestions = messages.length === 1 && !sending;
 
+  // Only the very last exchange gets edit/regenerate controls — editing or
+  // regenerating something mid-conversation would leave later messages
+  // referring to a question/answer that no longer exists.
   const lastUserIndex = [...messages].map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i !== -1).pop();
   const lastAssistantIndex = messages.length - 1;
 
@@ -554,6 +619,7 @@ export default function ChatWidget() {
                     </div>
                   )}
 
+                  {/* Edit / regenerate controls, shown only under the final exchange */}
                   {!isEditingThis && (canEdit || canRegenerate) && (
                     <div className="mt-1">
                       {canEdit && (
@@ -622,6 +688,7 @@ export default function ChatWidget() {
 
           <form onSubmit={handleSubmit} className="flex items-center gap-2 p-3 border-t border-gray-100 bg-white shrink-0">
             <input
+              ref={inputRef}
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -647,6 +714,7 @@ export default function ChatWidget() {
         onClick={() => setOpen((o) => !o)}
         className="w-14 h-14 rounded-full bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-300/50 flex items-center justify-center hover:scale-105 transition-transform"
         aria-label="Toggle chat assistant"
+        title="Chat with us (Ctrl+K or /)"
       >
         {open ? <X size={22} /> : <MessageCircle size={22} />}
       </button>

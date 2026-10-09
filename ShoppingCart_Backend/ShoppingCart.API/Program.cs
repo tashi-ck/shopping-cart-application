@@ -66,6 +66,8 @@ builder.Services.AddScoped<IPolicyRepository, PolicyRepository>();
 builder.Services.AddScoped<IPolicyService, PolicyService>();
 builder.Services.AddMemoryCache();
 builder.Services.AddScoped<IChatLogRepository, ChatLogRepository>();
+builder.Services.AddScoped<IDashboardRepository, DashboardRepository>();
+builder.Services.AddScoped<IDashboardService, DashboardService>();
 
 // Resilient HttpClient: short timeout so an outage fails fast and falls
 // through to "Flag" (=> Pending) in ReviewService, rather than hanging the request.

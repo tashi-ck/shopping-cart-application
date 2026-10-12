@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import AdminProductsPage from './AdminProductsPage';
 
 vi.mock('../../api/productApi', () => ({
-  getProducts: vi.fn(),
+  getProductsPaged: vi.fn(),
+  getProduct: vi.fn(),
   createProduct: vi.fn(),
   updateProduct: vi.fn(),
   deleteProduct: vi.fn(),
@@ -14,54 +16,67 @@ vi.mock('../../api/categoryApi', () => ({
   getCategories: vi.fn(),
 }));
 vi.mock('../../components/admin/ImageUpload', () => ({
-  default: ({ value, onChange }) => (
-    <button onClick={() => onChange('https://example.com/test.jpg')}>Mock Upload</button>
-  ),
+  default: () => <div>Mock Upload</div>,
+}));
+vi.mock('../../components/admin/ProductGalleryManager', () => ({
+  default: () => <div>Mock Gallery</div>,
 }));
 
-import { getProducts, createProduct } from '../../api/productApi';
+import { getProductsPaged, createProduct } from '../../api/productApi';
 import { getCategories } from '../../api/categoryApi';
+
+const emptyPage = { data: { items: [], totalCount: 0, totalPages: 0, page: 1, pageSize: 15 } };
 
 describe('AdminProductsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getProducts.mockResolvedValue({ data: [] });
-    getCategories.mockResolvedValue({
-      data: [{ categoryId: 1, name: 'Electronics' }],
-    });
+    getProductsPaged.mockResolvedValue(emptyPage);
+    getCategories.mockResolvedValue({ data: [{ categoryId: 1, name: 'Electronics' }] });
   });
 
-  it('submits a new product with correctly typed numeric fields', async () => {
+  it('creates a product from the drawer with correctly typed numeric fields', async () => {
     const user = userEvent.setup();
-    createProduct.mockResolvedValue({
-      data: { productId: 5, name: 'New Widget', categoryName: 'Electronics', price: 19.99, stockQuantity: 10, isActive: true },
-    });
+    createProduct.mockResolvedValue({ data: { productId: 5 } });
 
-    render(<AdminProductsPage />);
+    render(
+      <MemoryRouter>
+        <AdminProductsPage />
+      </MemoryRouter>
+    );
 
-    await waitFor(() => expect(screen.getByText('Electronics')).toBeInTheDocument());
+    await user.click(await screen.findByRole('button', { name: /new product/i }));
 
-    await user.selectOptions(screen.getByRole('combobox'), '1');
+    const dialog = await screen.findByRole('dialog');
+    await user.selectOptions(within(dialog).getByRole('combobox'), '1');
 
-    // getAllByRole('textbox') returns [Name input, Description textarea], in DOM order —
-    // both share role="textbox" regardless of element type
-    const [nameInput] = screen.getAllByRole('textbox');
+    const [nameInput] = within(dialog).getAllByRole('textbox');
     await user.type(nameInput, 'New Widget');
 
-    const [priceInput, stockInput] = screen.getAllByRole('spinbutton'); // price + stock number inputs
+    const [priceInput, stockInput] = within(dialog).getAllByRole('spinbutton');
     await user.type(priceInput, '19.99');
     await user.type(stockInput, '10');
 
-    await user.click(screen.getByText('Add product'));
+    await user.click(within(dialog).getByRole('button', { name: /create product/i }));
 
     await waitFor(() => {
       expect(createProduct).toHaveBeenCalledWith(
-        expect.objectContaining({ categoryId: 1, price: 19.99, stockQuantity: 10 })
+        expect.objectContaining({ categoryId: 1, name: 'New Widget', price: 19.99, stockQuantity: 10 })
       );
     });
 
-    const callArg = createProduct.mock.calls[0][0];
-    expect(typeof callArg.price).toBe('number');
-    expect(typeof callArg.stockQuantity).toBe('number');
+    const payload = createProduct.mock.calls[0][0];
+    expect(typeof payload.price).toBe('number');
+    expect(typeof payload.stockQuantity).toBe('number');
+  });
+
+  it('requests inactive products too, so admins can manage them', async () => {
+    render(
+      <MemoryRouter>
+        <AdminProductsPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(getProductsPaged).toHaveBeenCalled());
+    expect(getProductsPaged).toHaveBeenCalledWith(expect.objectContaining({ includeInactive: true }));
   });
 });

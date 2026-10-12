@@ -37,5 +37,6 @@ export const getProductsPaged = (filters = {}) => {
   if (filters.minPrice !== undefined && filters.minPrice !== "") params.minPrice = filters.minPrice;
   if (filters.maxPrice !== undefined && filters.maxPrice !== "") params.maxPrice = filters.maxPrice;
   if (filters.inStockOnly) params.inStockOnly = true;
+  if (filters.includeInactive) params.includeInactive = true; // honored by the backend for admins only
   return axiosClient.get("/products/search", { params });
 };

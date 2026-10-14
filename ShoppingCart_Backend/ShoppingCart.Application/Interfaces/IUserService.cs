@@ -1,4 +1,5 @@
-﻿using System;
+﻿using ShoppingCart.Application.Models;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -16,6 +17,7 @@ namespace ShoppingCart.Application.Interfaces
         Task<bool> SetUserActiveAsync(int userId, bool isActive);
         Task<bool> DeleteUserAsync(int userId);
         Task CompleteOnboardingAsync(int userId, SubmitOnboardingDto dto);
+        Task<UserPreferences?> GetPreferencesAsync(int userId);
 
     }
 }

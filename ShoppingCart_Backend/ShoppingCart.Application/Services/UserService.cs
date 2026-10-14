@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading.Tasks;
 using static ShoppingCart.Application.DTOs.OnboardingDtos;
 using static ShoppingCart.Application.DTOs.UserDtos;
+using ShoppingCart.Application.Models;
 
 namespace ShoppingCart.Application.Services
 {
@@ -90,5 +91,8 @@ namespace ShoppingCart.Application.Services
             await _userRepository.SaveOnboardingAsync(
                 userId, dto.PreferredCategoryIds ?? new List<int>(), dto.MinBudget, dto.MaxBudget, priority);
         }
+
+        public Task<UserPreferences?> GetPreferencesAsync(int userId) =>
+            _userRepository.GetPreferencesAsync(userId);
     }
 }

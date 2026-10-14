@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using ShoppingCart.Application.Interfaces;
 using static ShoppingCart.Application.DTOs.OnboardingDtos;
 using static ShoppingCart.Application.DTOs.UserDtos;
+using ShoppingCart.Application.Models;
 
 namespace ShoppingCart.API.Controllers
 {
@@ -27,6 +28,32 @@ namespace ShoppingCart.API.Controllers
 
         [HttpPost("onboarding")]
         public async Task<IActionResult> SubmitOnboarding([FromBody] SubmitOnboardingDto dto)
+        {
+            try
+            {
+                var userId = await GetCurrentUserIdAsync();
+                await _userService.CompleteOnboardingAsync(userId, dto);
+                return NoContent();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(ex.Message);
+            }
+        }
+
+        [HttpGet("me/preferences")]
+        public async Task<IActionResult> GetMyPreferences()
+        {
+            var userId = await GetCurrentUserIdAsync();
+            var preferences = await _userService.GetPreferencesAsync(userId);
+
+            // Null means "never completed onboarding": return an empty shape so the
+            // frontend can render the form without special-casing a 404.
+            return Ok(preferences ?? new UserPreferences(new List<int>(), null, null, null));
+        }
+
+        [HttpPut("me/preferences")]
+        public async Task<IActionResult> UpdateMyPreferences([FromBody] SubmitOnboardingDto dto)
         {
             try
             {

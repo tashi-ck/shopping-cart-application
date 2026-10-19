@@ -322,6 +322,16 @@ export default function ChatWidget() {
     navigate(`/products/${productId}`);
   };
 
+    // Lets other pages (e.g. PoliciesPage) open the chat with a window event.
+  useEffect(() => {
+    const handleOpen = () => {
+      setOpen(true);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    };
+    window.addEventListener("chat:open", handleOpen);
+    return () => window.removeEventListener("chat:open", handleOpen);
+  }, []);
+
   const handleClearChat = () => {
     setMessages([greeting]);
     setEditingIndex(null);

@@ -18,12 +18,16 @@ namespace ShoppingCart.Infrastructure.Services
 
         public S3ImageStorageService(IConfiguration configuration)
         {
-            var accessKey = configuration["Aws:AccessKey"];
-            var secretKey = configuration["Aws:SecretKey"];
             _region = configuration["Aws:Region"]!;
             _bucketName = configuration["Aws:BucketName"]!;
 
-            _s3Client = new AmazonS3Client(accessKey, secretKey, Amazon.RegionEndpoint.GetBySystemName(_region));
+            var regionEndpoint = Amazon.RegionEndpoint.GetBySystemName(_region);
+            var accessKey = configuration["Aws:AccessKey"];
+            var secretKey = configuration["Aws:SecretKey"];
+
+            _s3Client = !string.IsNullOrWhiteSpace(accessKey) && !accessKey.StartsWith("REPLACE")
+                ? new AmazonS3Client(accessKey, secretKey, regionEndpoint)
+                : new AmazonS3Client(regionEndpoint); // default chain: picks up the EC2 IAM role
         }
 
         public async Task<string> UploadImageAsync(Stream fileStream, string fileName, string contentType)

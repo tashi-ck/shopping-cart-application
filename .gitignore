@@ -6,3 +6,6 @@ shopping-cart-s3-uploader_accessKeys.csv
 *.dump
 frontend-dist/
 appsettings.Production.json
+
+*.sql
+*.bak

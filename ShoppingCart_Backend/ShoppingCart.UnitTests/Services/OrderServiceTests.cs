@@ -386,14 +386,10 @@ namespace ShoppingCart.UnitTests.Services
         }
 
         [Theory]
-        [InlineData("Confirmed")]
         [InlineData("Shipped")]
         [InlineData("Delivered")]
-        [InlineData("Cancelled")]
-        public async Task UpdateFulfillmentStatusAsync_ValidStatus_Delegates(
-            string newStatus)
+        public async Task UpdateFulfillmentStatusAsync_ValidStatus_Delegates(string newStatus)
         {
-            // Arrange
             var order = new OrderWithUser
             {
                 OrderId = 1,
@@ -402,63 +398,74 @@ namespace ShoppingCart.UnitTests.Services
                 PaymentStatus = "Paid"
             };
 
-            _orderRepositoryMock
-                .Setup(r => r.GetByIdForAdminAsync(1))
-                .ReturnsAsync(order);
-
-            _orderRepositoryMock
-                .Setup(r => r.UpdateFulfillmentStatusAsync(
-                    1,
-                    newStatus))
-                .ReturnsAsync(true);
-
-            var user = new User
+            _orderRepositoryMock.Setup(r => r.GetByIdForAdminAsync(1)).ReturnsAsync(order);
+            _orderRepositoryMock.Setup(r => r.UpdateFulfillmentStatusAsync(1, newStatus)).ReturnsAsync(true);
+            _userRepositoryMock.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(new User { UserId = 1, Email = "test@example.com" });
+            _orderRepositoryMock.Setup(r => r.GetByIdAsync(1, 1)).ReturnsAsync(new Order
             {
+                OrderId = 1,
                 UserId = 1,
-                Email = "test@example.com"
-            };
+                PaymentStatus = "Paid",
+                FulfillmentStatus = newStatus,
+                TotalAmount = 40m,
+                ShippingAddress = "123 Main St"
+            });
+            _orderRepositoryMock.Setup(r => r.GetItemsForOrderAsync(1)).ReturnsAsync(new List<OrderItemWithProduct>());
 
-            _userRepositoryMock
-                .Setup(r => r.GetByIdAsync(1))
-                .ReturnsAsync(user);
+            var result = await _orderService.UpdateFulfillmentStatusAsync(1, newStatus);
 
-            _orderRepositoryMock
-                .Setup(r => r.GetByIdAsync(1, 1))
-                .ReturnsAsync(new Order
-                {
-                    OrderId = 1,
-                    UserId = 1,
-                    PaymentStatus = "Paid",
-                    FulfillmentStatus = newStatus,
-                    TotalAmount = 40m,
-                    ShippingAddress = "123 Main St"
-                });
-
-            _orderRepositoryMock
-                .Setup(r => r.GetItemsForOrderAsync(1))
-                .ReturnsAsync(new List<OrderItemWithProduct>());
-
-            // Act
-            var result =
-                await _orderService.UpdateFulfillmentStatusAsync(
-                    1,
-                    newStatus);
-
-            // Assert
             result.Should().BeTrue();
-
-            _orderRepositoryMock.Verify(
-                r => r.UpdateFulfillmentStatusAsync(
-                    1,
-                    newStatus),
-                Times.Once);
-
+            _orderRepositoryMock.Verify(r => r.UpdateFulfillmentStatusAsync(1, newStatus), Times.Once);
             _emailServiceMock.Verify(
-                e => e.SendOrderStatusUpdateAsync(
-                    "test@example.com",
-                    It.IsAny<OrderDto>(),
-                    "Confirmed"),
-                Times.Once);
+                e => e.SendOrderStatusUpdateAsync("test@example.com", It.IsAny<OrderDto>(), "Confirmed"), Times.Once);
+        }
+
+        [Fact]
+        public async Task UpdateFulfillmentStatusAsync_Cancelled_RestocksAndRefunds_NotJustStatusChange()
+        {
+            _orderRepositoryMock.Setup(r => r.GetByIdForAdminAsync(1)).ReturnsAsync(new OrderWithUser
+            {
+                OrderId = 1,
+                UserId = 7,
+                FulfillmentStatus = "Confirmed",
+                PaymentStatus = "Paid"
+            });
+            _orderRepositoryMock.Setup(r => r.GetByIdAsync(1, 7)).ReturnsAsync(new Order
+            {
+                OrderId = 1,
+                UserId = 7,
+                FulfillmentStatus = "Confirmed",
+                PaymentStatus = "Paid",
+                PaymentReference = "cs_test_1",
+                ShippingAddress = "123 Main St"
+            });
+            _orderRepositoryMock.Setup(r => r.GetItemsForOrderAsync(1)).ReturnsAsync(new List<OrderItemWithProduct>());
+
+            var result = await _orderService.UpdateFulfillmentStatusAsync(1, "Cancelled");
+
+            result.Should().BeTrue();
+            _orderRepositoryMock.Verify(r => r.CancelOrderAsync(1, 7), Times.Once);     // restocks items
+            _paymentServiceMock.Verify(p => p.RefundAsync("cs_test_1"), Times.Once);    // refunds the customer
+            _orderRepositoryMock.Verify(
+                r => r.UpdateFulfillmentStatusAsync(It.IsAny<int>(), It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task UpdateFulfillmentStatusAsync_CancelledOrder_CannotBeReopened()
+        {
+            _orderRepositoryMock.Setup(r => r.GetByIdForAdminAsync(1)).ReturnsAsync(new OrderWithUser
+            {
+                OrderId = 1,
+                UserId = 1,
+                FulfillmentStatus = "Cancelled",
+                PaymentStatus = "Refunded"
+            });
+
+            var act = async () => await _orderService.UpdateFulfillmentStatusAsync(1, "Shipped");
+
+            await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*reopened*");
+            _orderRepositoryMock.Verify(
+                r => r.UpdateFulfillmentStatusAsync(It.IsAny<int>(), It.IsAny<string>()), Times.Never);
         }
     }
 }

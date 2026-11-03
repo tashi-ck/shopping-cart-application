@@ -15,7 +15,7 @@ function getPageItems(page, totalPages) {
   return items;
 }
 
-export default function Pagination({ page, totalPages, totalCount, pageSize, onChange }) {
+export default function Pagination({ page, totalPages, totalCount, pageSize, onChange, itemLabel = "products" }) {
   if (totalPages <= 1) return null;
 
   const from = (page - 1) * pageSize + 1;
@@ -28,7 +28,7 @@ export default function Pagination({ page, totalPages, totalCount, pageSize, onC
     <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 pb-10">
       <p className="text-xs text-gray-500">
         Showing <span className="font-medium text-gray-900">{from}–{to}</span> of{" "}
-        <span className="font-medium text-gray-900">{totalCount}</span> products
+        <span className="font-medium text-gray-900">{totalCount}</span> {itemLabel}
       </p>
 
       <nav className="flex items-center gap-1" aria-label="Pagination">

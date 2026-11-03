@@ -18,6 +18,8 @@ export default function AdminOrderDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
 
+  const [statusError, setStatusError] = useState("");
+
   useEffect(() => {
     setLoading(true);
     getOrderForAdmin(id)
@@ -27,14 +29,27 @@ export default function AdminOrderDetailPage() {
   }, [id]);
 
   const handleStatusChange = async (newStatus) => {
-  const previousStatus = order.fulfillmentStatus;
-  setUpdating(true);
-  setOrder((prev) => ({ ...prev, fulfillmentStatus: newStatus }));
+  if (newStatus === order.fulfillmentStatus) return;
+  if (
+    newStatus === "Cancelled" &&
+    !window.confirm("Cancel this order? Items go back into stock and the customer is refunded.")
+  ) {
+    return;
+  }
 
+  setStatusError("");
+  setUpdating(true);
   try {
     await updateOrderFulfillmentStatus(id, newStatus);
-  } catch {
-    setOrder((prev) => ({ ...prev, fulfillmentStatus: previousStatus }));
+    // Refetch: cancelling also flips the payment status to Refunded.
+    const res = await getOrderForAdmin(id);
+    setOrder(res.data);
+  } catch (err) {
+    setStatusError(
+      typeof err?.response?.data === "string" && err.response.data
+        ? err.response.data
+        : "Couldn't update this order."
+    );
   } finally {
     setUpdating(false);
   }
@@ -87,6 +102,12 @@ export default function AdminOrderDetailPage() {
       <p className="text-sm text-gray-400 mb-6">
         Placed {new Date(order.createdAt).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}
       </p>
+
+      {statusError && (
+  <div role="alert" className="mb-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+    {statusError}
+  </div>
+)}
 
       <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-4">
         <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2 mb-3">

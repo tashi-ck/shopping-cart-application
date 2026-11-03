@@ -183,6 +183,18 @@ namespace ShoppingCart.Application.Services
             if (previousStatus == fulfillmentStatus)
                 return true;
 
+            // A cancelled order has already been restocked and refunded; reopening it would corrupt both.
+            if (previousStatus == "Cancelled")
+                throw new InvalidOperationException("A cancelled order can't be reopened.");
+
+            // Same path as a customer cancellation: restock items, refund through Stripe, email the customer.
+            // The repository only allows this while the order is still "Confirmed".
+            if (fulfillmentStatus == "Cancelled")
+            {
+                await CancelOrderAsync(order.UserId, orderId);
+                return true;
+            }
+
             var updated = await _orderRepository.UpdateFulfillmentStatusAsync(orderId, fulfillmentStatus);
 
             if (updated)
